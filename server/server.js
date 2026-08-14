@@ -124,6 +124,33 @@ async function handleApi(req, res, path, url) {
     return send(res, 200, { token })
   }
 
+  // public listing for the explore page (no auth, no secrets)
+  if (path === '/api/public/videos' && req.method === 'GET') {
+    const meta = loadMeta()
+    return send(res, 200, Object.entries(meta).map(([name, m]) => ({ name, ...m })))
+  }
+
+  // site statistics (public)
+  if (path === '/api/stats' && req.method === 'GET') {
+    const meta = loadMeta()
+    const items = Object.values(meta)
+    const byDay = {}
+    let totalSize = 0
+    for (const m of items) {
+      const day = (m.uploaded || '').slice(0, 10)
+      if (!day) continue
+      byDay[day] = byDay[day] || { date: day, count: 0, size: 0 }
+      byDay[day].count++
+      byDay[day].size += m.size || 0
+      totalSize += m.size || 0
+    }
+    return send(res, 200, {
+      total: items.length,
+      totalSize,
+      byDay: Object.values(byDay).sort((a, b) => (a.date < b.date ? -1 : 1)),
+    })
+  }
+
   if (path === '/api/admin/check')
     return authed(req) ? send(res, 200, { ok: true }) : send(res, 401, { error: 'unauthorized' })
 
