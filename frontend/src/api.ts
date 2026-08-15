@@ -80,7 +80,12 @@ export const siteBase = (): string => {
 export const absUrl = (path: string): string => siteBase() + path
 
 export const fmtSize = (n: number) =>
-  n > 1 << 30 ? (n / (1 << 30)).toFixed(2) + ' GB' : n > 1 << 20 ? (n / (1 << 20)).toFixed(1) + ' MB' : Math.max(1, Math.round(n / 1024)) + ' KB'
+  // the Math.max floor keeps a 300-byte file from reading "0 KB"; a genuine
+  // zero must still say zero
+  !n ? '0 KB'
+    : n > 1 << 30 ? (n / (1 << 30)).toFixed(2) + ' GB'
+      : n > 1 << 20 ? (n / (1 << 20)).toFixed(1) + ' MB'
+        : Math.max(1, Math.round(n / 1024)) + ' KB'
 
 export const fmtDur = (s: number) => {
   if (!s) return ''

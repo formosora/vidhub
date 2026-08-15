@@ -513,6 +513,9 @@ onMounted(async () => {
             <label class="switch"><input type="checkbox" v-model="settings.explore_public" :true-value="1" :false-value="0" /><span class="knob" /><span class="sw-label">{{ t('set.explorePublic') }}</span></label>
             <label class="switch"><input type="checkbox" v-model="settings.explore_images" :true-value="1" :false-value="0" /><span class="knob" /><span class="sw-label">{{ t('set.exploreImages') }}</span></label>
             <label class="switch"><input type="checkbox" v-model="settings.stats_public" :true-value="1" :false-value="0" /><span class="knob" /><span class="sw-label">{{ t('set.statsPublic') }}</span></label>
+          </div>
+          <p class="hint">{{ t('set.statsHint') }}</p>
+          <div class="row" style="gap:1.4rem;margin-bottom:.9rem">
             <label class="switch"><input type="checkbox" v-model="settings.ad_top" :true-value="1" :false-value="0" /><span class="knob" /><span class="sw-label">{{ t('set.adTop') }}</span></label>
             <label class="switch"><input type="checkbox" v-model="settings.ad_bot" :true-value="1" :false-value="0" /><span class="knob" /><span class="sw-label">{{ t('set.adBot') }}</span></label>
             <label class="switch"><input type="checkbox" v-model="settings.player_ad" :true-value="1" :false-value="0" /><span class="knob" /><span class="sw-label">{{ t('set.adPlayer') }}</span></label>

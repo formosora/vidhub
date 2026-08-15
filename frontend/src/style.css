@@ -142,9 +142,13 @@ button { font-family: inherit; cursor: pointer; }
 .stat-card span { color: var(--muted); font-size: .85rem; }
 
 .chart-card { padding: 1.4rem; }
-.chart { display: flex; align-items: flex-end; gap: 6px; height: 160px; padding-top: 1rem; }
-.chart .bar { flex: 1; display: flex; flex-direction: column; justify-content: flex-end; align-items: center; gap: .4rem; min-width: 0; }
-.chart .bar i { width: 100%; border-radius: 5px 5px 0 0; background: linear-gradient(180deg, var(--accent), rgba(139,92,246,.25)); min-height: 3px; transition: height .3s; }
+/* Bars need a definite height to size against. Percentage heights resolve to
+   `auto` when the parent height is content-derived, which used to collapse every
+   bar to its 3px min-height. `.track` gets that definite height from flex. */
+.chart { display: flex; align-items: stretch; gap: 6px; height: 160px; padding-top: 1rem; }
+.chart .bar { flex: 1; display: flex; flex-direction: column; align-items: center; gap: .4rem; min-width: 0; }
+.chart .bar .track { flex: 1; width: 100%; display: flex; align-items: flex-end; justify-content: center; }
+.chart .bar i { width: 100%; max-width: 72px; border-radius: 5px 5px 0 0; background: linear-gradient(180deg, var(--accent), rgba(139,92,246,.25)); min-height: 3px; transition: height .3s; }
 .chart .bar small { font-size: .68rem; color: var(--muted); }
 
 /* ---------- admin ---------- */

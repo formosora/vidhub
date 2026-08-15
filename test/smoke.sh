@@ -102,6 +102,18 @@ ck "quota msg zh" "该 IP 超过每日上传上限" "$(curl -s -X PUT $B/api/adm
 ck "quota msg en" "daily upload limit" "$(curl -s -H 'Accept-Language: en-US' -X POST "$B/api/videos?name=qz.mp4" "${A[@]}" --data-binary @qz.mp4)"
 curl -s -X PUT $B/api/admin/settings "${A[@]}" -H 'Content-Type: application/json' -d '{"daily_limit_ip":0}' -o/dev/null
 
+echo "== statistics scoping =="
+curl -s -X PUT $B/api/admin/settings "${A[@]}" -H 'Content-Type: application/json' -d '{"stats_public":0}' -o/dev/null
+ck "anonymous refused"       "403" "$(curl -s -o/dev/null -w '%{http_code}' $B/api/stats)"
+ck "refusal says why"        "登录" "$(curl -s -H 'Accept-Language: zh-CN' $B/api/stats)"
+ck "admin gets site scope"   '"scope":"site"' "$(curl -s $B/api/stats "${A[@]}")"
+ck "uploader gets own scope" '"scope":"own"' "$(curl -s $B/api/stats "${NT[@]}")"
+ck "own figures are scoped"  '"total":0' "$(curl -s $B/api/stats "${NT[@]}")"
+ck "admin figures are not"   "" "$(curl -s $B/api/stats "${A[@]}" | grep -o '\"total\":0,')"
+curl -s -X PUT $B/api/admin/settings "${A[@]}" -H 'Content-Type: application/json' -d '{"stats_public":1}' -o/dev/null
+ck "opt-in reopens it"       '"scope":"site"' "$(curl -s $B/api/stats)"
+curl -s -X PUT $B/api/admin/settings "${A[@]}" -H 'Content-Type: application/json' -d '{"stats_public":0}' -o/dev/null
+
 echo "== P0-1  uploaded HTML cannot execute =="
 curl -s -X PUT $B/api/admin/settings "${A[@]}" -H 'Content-Type: application/json' -d '{"allow_other":1}' -o/dev/null
 printf '<script>alert(1)</script>' > x.html

@@ -65,6 +65,7 @@ const M = {
   'c.underReview':         ['内容审核中', 'Content under review'],
   'c.exploreClosed':       ['广场未开放', 'The gallery is not public'],
   'c.statsClosed':         ['统计未开放', 'Statistics are not public'],
+  'c.statsLoginRequired':  ['请登录后查看统计', 'Sign in to view statistics'],
   'c.badVisibility':       ['可见性取值无效', 'Invalid visibility value'],
   'c.badHash':             ['需为 sha256 哈希', 'Must be a sha256 hash'],
   'c.ipRequired':          ['IP 不能为空', 'IP cannot be empty'],

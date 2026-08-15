@@ -148,9 +148,16 @@ export async function handleApi(req, res, path, url) {
     return send(res, 200, { total, items: rows.map(publicVideoOut) })
   }
 
+  /**
+   * Statistics are scoped to whoever is asking. Site totals are operational
+   * data — storage, upload volume — so an uploader gets their own numbers and
+   * an anonymous visitor gets nothing unless the owner opts in.
+   */
   if (path === '/api/stats' && req.method === 'GET') {
-    if (!conf('stats_public')) return fail(403, 'c.statsClosed')
-    return send(res, 200, buildStats())
+    if (isAdmin(user)) return send(res, 200, { scope: 'site', ...buildStats() })
+    if (user) return send(res, 200, { scope: 'own', ...buildStats({ userId: user.id }) })
+    if (conf('stats_public')) return send(res, 200, { scope: 'site', ...buildStats() })
+    return fail(403, 'c.statsLoginRequired')
   }
 
   // ---------- upload ----------
@@ -277,7 +284,7 @@ export async function handleApi(req, res, path, url) {
       return send(res, 200, { ok: true })
     }
 
-    if (path === '/api/admin/stats' && req.method === 'GET') return send(res, 200, buildStats(true))
+    if (path === '/api/admin/stats' && req.method === 'GET') return send(res, 200, buildStats({ admin: true }))
 
     if (path === '/api/admin/users' && req.method === 'GET')
       return send(res, 200, q.all(`
@@ -384,8 +391,11 @@ export async function handleApi(req, res, path, url) {
 
 // ---------- stats ----------
 
-function buildStats(admin = false) {
-  const items = q.all("SELECT size, uploaded, views, kind, status FROM videos WHERE status != 'recycled'")
+/** `userId` narrows every figure to one uploader; `admin` adds the site-wide extras. */
+function buildStats({ admin = false, userId = null } = {}) {
+  const items = userId
+    ? q.all("SELECT size, uploaded, views FROM videos WHERE status != 'recycled' AND user_id = ?", userId)
+    : q.all("SELECT size, uploaded, views FROM videos WHERE status != 'recycled'")
   const byDay = {}
   let totalSize = 0, views = 0
   for (const m of items) {

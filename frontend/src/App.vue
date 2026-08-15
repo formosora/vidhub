@@ -46,7 +46,7 @@ onMounted(ensureSite)
         <nav class="nav">
           <RouterLink to="/">{{ t('nav.home') }}</RouterLink>
           <RouterLink v-if="state.conf?.explore_public" to="/explore">{{ t('nav.explore') }}</RouterLink>
-          <RouterLink v-if="state.conf?.stats_public" to="/stats">{{ t('nav.stats') }}</RouterLink>
+          <RouterLink v-if="state.conf?.stats_public || state.me" to="/stats">{{ t('nav.stats') }}</RouterLink>
           <template v-if="state.me">
             <RouterLink to="/my">{{ t('nav.mine') }}</RouterLink>
             <RouterLink v-if="state.me.role === 'admin'" to="/admin">{{ t('nav.admin') }}</RouterLink>

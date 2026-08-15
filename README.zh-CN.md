@@ -82,7 +82,8 @@ docker run -d --name vidhub -p 8081:8080 \
 | `GET/PUT /api/admin/settings` | 管理员 | 全部站点设置 |
 | `GET/POST/PATCH/DELETE /api/admin/users…` | 管理员 | 用户管理 |
 | `GET /api/admin/logs` · `…/iprules` · `…/hashblack` | 管理员 | 日志 / IP 名单 / 哈希黑名单 |
-| `GET /api/public/videos` · `/api/stats` | 公开\* | 广场 / 统计（\*可关闭；不含上传者 IP/用户名） |
+| `GET /api/public/videos` | 公开\* | 广场（\*可关闭；不含上传者 IP/用户名） |
+| `GET /api/stats` | 按身份 | 管理员看全站，上传员看自己，匿名需开启 `stats_public` |
 | `GET /v/<name>` | 公开 | 视频流（Range/206） |
 | `GET /t/<name>` · `/p/<name>` · `/d/<name>` | 公开 | 缩略图 / 播放页 / 下载 |
 
@@ -122,7 +123,7 @@ DATA_DIR=/tmp/vh-test PORT=8098 ADMIN_PASSWORD=TestPass123 node server/server.js
 BASE=http://localhost:8098 ADMIN_PASSWORD=TestPass123 bash test/smoke.sh
 ```
 
-`test/smoke.sh`（88 条断言，不需要 ffmpeg）——注册开关与验证码、可见性与广场过滤、
+`test/smoke.sh`（95 条断言，不需要 ffmpeg）——注册开关与验证码、可见性与广场过滤、
 分享链接格式、双语 API、上传内容不可执行、最后一个管理员不可锁死、公开接口不泄露
 IP、设置项越界钳制、隔离内容不可重传、配额与防盗链、越权边界、Range/路径穿越。
 
@@ -174,6 +175,19 @@ node --test test/captcha.test.mjs
 也会跟着变成对应语言。
 
 新增语言：在 `server/lib/i18n.js` 和 `frontend/src/i18n.ts` 的词表各加一列即可。
+
+## 📊 统计
+
+统计数字按调用者的身份收敛 —— 存储量和上传量属于经营数据，不是对外展示素材：
+
+| 调用者 | 看到的范围 |
+| --- | --- |
+| 管理员 | 全站 |
+| 已登录的上传员 | 仅自己上传的内容 |
+| 匿名访客 | 什么都看不到，除非开启 `stats_public` |
+
+`stats_public` 默认**关闭**。开启后全站汇总对所有人可见 —— 这是给「公开展示型」
+站点的选项，需要自己权衡。
 
 ## 👁 可见性
 

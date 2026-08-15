@@ -86,7 +86,9 @@ export const DEFAULTS = {
   // ---- portal ----
   explore_public: 1,                // 广场公开
   explore_images: 0,                // 广场同时展示图片
-  stats_public: 1,                  // 统计公开
+  // 统计默认仅登录可见 —— 存储量/上传量属于经营数据, 不该对匿名访客敞开。
+  // 登录用户看自己的, 管理员看全站; 打开此项则匿名访客也能看全站汇总。
+  stats_public: 0,                  // 匿名访客也能看全站统计
   ad_top: 0,
   ad_top_info: '',
   ad_bot: 0,

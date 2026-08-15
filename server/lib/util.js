@@ -73,8 +73,5 @@ export function ipMatches(rule, ip) {
   return false
 }
 
-export const fmtBytes = n =>
-  n > 1 << 30 ? (n / (1 << 30)).toFixed(2) + ' GB' : n > 1 << 20 ? (n / (1 << 20)).toFixed(1) + ' MB' : Math.max(1, Math.round(n / 1024)) + ' KB'
-
 /** Escape user text before embedding into server-rendered HTML (player page). */
 export const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]))

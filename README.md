@@ -90,7 +90,8 @@ Or `docker compose up -d`.
 | `GET/PUT /api/admin/settings` | admin | All site settings |
 | `GET/POST/PATCH/DELETE /api/admin/users…` | admin | User management |
 | `GET /api/admin/logs` · `…/iprules` · `…/hashblack` | admin | Logs / IP rules / hash blocklist |
-| `GET /api/public/videos` · `/api/stats` | public\* | Gallery / statistics (\*can be closed; never includes uploader IP or username) |
+| `GET /api/public/videos` | public\* | Gallery (\*can be closed; never includes uploader IP or username) |
+| `GET /api/stats` | scoped | Site-wide for admins, own figures for uploaders, nothing for anonymous unless `stats_public` |
 | `GET /v/<name>` | public | Media stream (Range/206) |
 | `GET /t/<name>` · `/p/<name>` · `/d/<name>` | public | Thumbnail / player page / download |
 
@@ -132,7 +133,7 @@ DATA_DIR=/tmp/vh-test PORT=8098 ADMIN_PASSWORD=TestPass123 node server/server.js
 BASE=http://localhost:8098 ADMIN_PASSWORD=TestPass123 bash test/smoke.sh
 ```
 
-`test/smoke.sh` — 88 assertions, no ffmpeg required. Covers registration and the
+`test/smoke.sh` — 95 assertions, no ffmpeg required. Covers registration and the
 CAPTCHA, visibility and gallery filtering, share-link formats, the bilingual API,
 uploads that must not be executable, the last administrator that must not be
 lockable, public endpoints that must not leak IPs, settings clamping, quarantined
@@ -201,6 +202,20 @@ language re-renders **historical log rows** too.
 
 To add a language, append a column to the tables in `server/lib/i18n.js` and
 `frontend/src/i18n.ts`.
+
+## 📊 Statistics
+
+Figures are scoped to whoever is asking, because storage and upload volume are
+operational numbers rather than public showcase material:
+
+| Caller | Sees |
+| --- | --- |
+| Administrator | The whole site |
+| Signed-in uploader | Only their own uploads |
+| Anonymous | Nothing, unless `stats_public` is turned on |
+
+`stats_public` is **off** by default. Turning it on exposes site-wide totals to
+everyone, which is a deliberate choice for a public showcase.
 
 ## 👁 Visibility
 
