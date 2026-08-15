@@ -1,45 +1,54 @@
-# 🎬 vidhub · 商业级自托管视频床
+# 🎬 vidhub · self-hosted video hosting
 
-上传视频，即刻获得可流式播放的链接与嵌入代码。
-Vue 3 管理门户 + **零 npm 依赖** Node 服务端（内置 SQLite）+ ffmpeg 媒体管线，一个 Docker 容器搞定。
+Upload a video, get a streamable link and embed code back immediately.
+A Vue 3 portal and admin panel, a **zero-npm-dependency** Node server (SQLite built
+in), and an ffmpeg media pipeline — all in one Docker container.
+
+**English** · [简体中文](README.zh-CN.md)
 
 ![Vue](https://img.shields.io/badge/Vue_3-4FC08D?style=flat-square&logo=vuedotjs&logoColor=white)
 ![Node](https://img.shields.io/badge/Node.js_24-339933?style=flat-square&logo=nodedotjs&logoColor=white)
 ![Docker](https://img.shields.io/badge/Docker-2496ED?style=flat-square&logo=docker&logoColor=white)
 
-## ✨ 功能
+## ✨ Features
 
-**上传与存储**
-- 流式上传（滚动 SHA-256，不占用内存；内容寻址存储，相同文件秒传去重）
-- 多文件批量上传、大小/格式白名单、最低分辨率限制
-- 支持视频 + 图片 + （可选）任意文件
+**Upload & storage**
+- Streaming upload with a rolling SHA-256 — nothing is buffered in memory, and
+  content-addressed storage means an identical file is deduplicated instantly
+- Batch uploads, size and extension allowlists, minimum-resolution rejection
+- Video, images, and optionally any file type
 
-**媒体管线（ffmpeg）**
-- 统一转码 MP4(H.264)/WebM(VP9)，CRF 压缩画质可调
-- 文字/图片水印（九宫格定位）、强制/等比缩放、宽高上下限
-- 自动生成缩略图；HTTP Range/206 真流式播放，拖动秒响应
+**Media pipeline (ffmpeg)**
+- Transcode everything to MP4 (H.264) or WebM (VP9), with an adjustable CRF
+- Text and image watermarks on a 3×3 position grid, proportional or forced
+  scaling, upper and lower size bounds
+- Automatic thumbnails; real HTTP Range/206 streaming, so seeking is instant
 
-**内容安全**
-- 🛡️ 鉴黄：本地抽帧肤色检测（零成本）或对接外部审核 API，命中自动隔离/删除
-- IP 黑白名单（支持 `1.2.3.*` / CIDR）、文件哈希黑名单、防盗链
-- 上传日志 + IP 归属地、每 IP/每用户每日上传限额、站点总存储配额、登录限速
-- 上传内容以 `nosniff` + `sandbox` CSP 下发；非视频/图片类型强制附件下载，
-  杜绝上传的 HTML/SVG 在本站域名下执行脚本
+**Content safety**
+- 🛡️ NSFW moderation: a local skin-tone frame heuristic (free) or an external
+  moderation API, quarantining or deleting on a hit
+- IP allow/block lists (`1.2.3.*` and CIDR), file-hash blocklist, hotlink protection
+- Upload log with IP geolocation, per-IP and per-user daily caps, a site-wide
+  storage quota, and login rate limiting
+- Uploads are served with `nosniff` and a `sandbox` CSP; anything that is not
+  video or image is forced to download, so an uploaded HTML or SVG file can
+  never run script on your origin
 
-**多用户与 API**
-- 管理员 / 上传员 双角色；仅上传用户、禁用、日限额、重置密码
-- 可选的自助注册 + 算术人机验证（笔画绘制，SVG 内不含文字）
-- 每个文件可设公开 / 私有（私有 = 不在广场列出），账号可设默认值
-- 界面与 API 全量中英双语，语言跟随浏览器并可手动切换
-- API Key（`Authorization: Bearer vh_xxx`）供第三方工具上传
-- 回收站（软删除/恢复/彻底删除）
+**Multi-user & API**
+- Two roles — administrator and uploader — with per-user daily caps, account
+  disabling, and password resets
+- Optional self-service registration behind a stroke-drawn arithmetic CAPTCHA
+- Per-file public/unlisted visibility, with a per-account default
+- Full English/Chinese localisation of the UI *and* the API
+- API keys (`Authorization: Bearer vh_xxx`) for third-party upload tools
+- Recycle bin (soft delete, restore, permanent delete)
 
-**门户与商业化**
-- 广场（缩略图画廊 + 搜索）、统计页、播放页 OG 分享
-- 顶部/底部/播放页广告位、全站公告、自定义 head/页脚代码（站长统计）
-- 外链域名可配置（CDN / 独立分发域名）
+**Portal**
+- Gallery with thumbnails and search, statistics page, player pages with OG tags
+- Top/bottom/player ad slots, site-wide notice, custom head and footer code
+- Configurable link domain, for serving through a CDN or a separate origin
 
-## 🚀 部署
+## 🚀 Deployment
 
 ```bash
 docker build -t vidhub .
@@ -47,143 +56,167 @@ docker run -d --name vidhub -p 8081:8080 \
   -v vidhub-data:/app/data \
   -e ADMIN_PASSWORD="choose-a-strong-one" \
   vidhub
-# 门户 → http://localhost:8081/   管理 → 登录 admin
+# portal → http://localhost:8081/   admin → sign in as "admin"
 ```
 
-或 `docker compose up -d`。
+Or `docker compose up -d`.
 
-| 环境变量 | 默认 | 说明 |
+| Variable | Default | Purpose |
 | --- | --- | --- |
-| `ADMIN_PASSWORD` | `change-me` | 首次启动创建 admin 的密码（**务必修改**） |
-| `PORT` | `8080` | 监听端口 |
-| `DATA_DIR` | `/app/data` | 数据目录（视频/缩略图/SQLite） |
-| `TRUST_PROXY` | `1` | 反代后取真实 IP（X-Forwarded-For） |
-| `FFMPEG_PATH` | `ffmpeg` | 自定义 ffmpeg 路径 |
+| `ADMIN_PASSWORD` | `change-me` | Password for the admin account created on first boot (**change it**) |
+| `PORT` | `8080` | Listen port |
+| `DATA_DIR` | `/app/data` | Data directory (videos, thumbnails, SQLite) |
+| `TRUST_PROXY` | `1` | Read the real client IP from `X-Forwarded-For` behind a reverse proxy |
+| `FFMPEG_PATH` | `ffmpeg` | Path to a custom ffmpeg binary |
 
-> 无 ffmpeg 时自动降级为"原样存储"（转码/水印/鉴黄停用），其余功能不受影响。
+> Without ffmpeg the server falls back to storing originals as-is. Transcoding,
+> watermarking and moderation switch off; everything else keeps working.
 
 ## 🔌 API
 
-| Endpoint | 权限 | 说明 |
+| Endpoint | Access | Purpose |
 | --- | --- | --- |
-| `GET /api/health` | 公开 | 存活探针（Docker HEALTHCHECK 使用） |
-| `POST /api/login` | 公开 | 登录（限速） |
-| `GET /api/captcha` | 公开 | 取人机验证题 → `{id, svg, ttl}`（限速，一次性） |
-| `POST /api/register` | 公开* | 自助注册（*需后台开启；限速 + 验证码） |
-| `POST /api/videos?name=…` | 用户/游客* | 上传（binary body，*游客需后台开启） |
-| `GET /api/videos?page=&q=` | 用户 | 我的视频（admin 加 `all=1` 看全站） |
-| `DELETE /api/videos/<name>` | 所有者 | 移入回收站 |
-| `POST /api/videos/<name>/restore` · `DELETE …/force` | 所有者 | 恢复 / 彻底删除 |
-| `PATCH /api/videos/<name>` | 所有者 | 改可见性 `{visibility:"public"\|"private"}` |
-| `POST /api/videos/<name>/ban` · `/unban` | 管理员 | 隔离 / 解除 |
-| `GET/PATCH /api/me` | 用户 | 读取 / 修改个人偏好（默认可见性） |
-| `GET/PUT /api/admin/settings` | 管理员 | 全部站点设置 |
-| `GET/POST/PATCH/DELETE /api/admin/users…` | 管理员 | 用户管理 |
-| `GET /api/admin/logs` · `…/iprules` · `…/hashblack` | 管理员 | 日志 / IP 名单 / 哈希黑名单 |
-| `GET /api/public/videos` · `/api/stats` | 公开* | 广场 / 统计（*可关闭；不含上传者 IP/用户名） |
-| `GET /v/<name>` | 公开 | 视频流（Range/206） |
-| `GET /t/<name>` · `/p/<name>` · `/d/<name>` | 公开 | 缩略图 / 播放页 / 下载 |
+| `GET /api/health` | public | Liveness probe (used by the Docker healthcheck) |
+| `POST /api/login` | public | Sign in (rate limited) |
+| `GET /api/captcha` | public | Fetch a challenge → `{id, svg, ttl}` (rate limited, single use) |
+| `POST /api/register` | public\* | Self-registration (\*must be enabled in admin; rate limited + CAPTCHA) |
+| `POST /api/videos?name=…` | user/guest\* | Upload (binary body; \*guest uploads must be enabled) |
+| `GET /api/videos?page=&q=` | user | Own videos (admins add `all=1` for the whole site) |
+| `DELETE /api/videos/<name>` | owner | Move to the recycle bin |
+| `POST /api/videos/<name>/restore` · `DELETE …/force` | owner | Restore / delete permanently |
+| `PATCH /api/videos/<name>` | owner | Change visibility, `{visibility:"public"\|"private"}` |
+| `POST /api/videos/<name>/ban` · `/unban` | admin | Quarantine / release |
+| `GET/PATCH /api/me` | user | Read or update personal preferences (default visibility) |
+| `GET/PUT /api/admin/settings` | admin | All site settings |
+| `GET/POST/PATCH/DELETE /api/admin/users…` | admin | User management |
+| `GET /api/admin/logs` · `…/iprules` · `…/hashblack` | admin | Logs / IP rules / hash blocklist |
+| `GET /api/public/videos` · `/api/stats` | public\* | Gallery / statistics (\*can be closed; never includes uploader IP or username) |
+| `GET /v/<name>` | public | Media stream (Range/206) |
+| `GET /t/<name>` · `/p/<name>` · `/d/<name>` | public | Thumbnail / player page / download |
 
-## 📁 结构
+## 📁 Layout
 
 ```
-├── frontend/       # Vue 3 + TS + Vite 门户与管理后台
+├── frontend/       # Vue 3 + TS + Vite portal and admin panel
 ├── server/
-│   ├── server.js   # 路由入口：API / 视频流 / 播放页 / 静态
-│   └── lib/        # db · config · auth · security · upload · media · moderate · player
-├── test/smoke.sh   # API 冒烟测试（安全回归 + 权限边界）
-├── Dockerfile      # 多阶段构建，单容器，内置 ffmpeg
+│   ├── server.js   # entry point: API / media streaming / player pages / static
+│   └── lib/        # db · config · auth · security · upload · media · moderate · player · i18n · captcha
+├── test/           # smoke.sh · pipeline.sh · captcha.test.mjs
+├── Dockerfile      # multi-stage build, single container, ffmpeg included
 └── docker-compose.yml
 ```
 
-## 💻 本地开发（不用 Docker）
+## 💻 Local development (no Docker)
 
-需要 Node 22+（`node:sqlite`）。ffmpeg 可选，缺失时自动降级为原样存储。
+Needs Node 22+ for `node:sqlite`. ffmpeg is optional.
 
 ```bash
 cd frontend && npm install && npm run build && cp -r dist ../server/wwwroot && cd ..
 DATA_DIR=./data PORT=8080 ADMIN_PASSWORD=dev-password node --no-warnings server/server.js
 ```
 
-前端热更新用 `npm run dev`（已配置 `/api` 代理到 8080）。
+For frontend hot reload use `npm run dev` — `/api` is already proxied to 8080.
 
-**Windows 装 ffmpeg**（无需管理员权限）：从 <https://www.gyan.dev/ffmpeg/builds/>
-下载 `ffmpeg-release-essentials.zip`，核对同目录下的 `.sha256`，解压到
-`%LOCALAPPDATA%\Programs\ffmpeg`，再把其中的 `bin` 加进用户 PATH。
+**Installing ffmpeg on Windows** (no administrator rights needed): download
+`ffmpeg-release-essentials.zip` from <https://www.gyan.dev/ffmpeg/builds/>, check
+it against the `.sha256` published alongside it, extract to
+`%LOCALAPPDATA%\Programs\ffmpeg`, and add that folder's `bin` to your user PATH.
 
-## 🧪 测试
+## 🧪 Tests
 
-两个脚本都会真实上传、封禁、改设置，**务必指向一次性数据目录**：
+Both scripts really do upload, ban and rewrite settings, so **always point them at
+a throwaway data directory**:
 
 ```bash
 DATA_DIR=/tmp/vh-test PORT=8098 ADMIN_PASSWORD=TestPass123 node server/server.js &
 BASE=http://localhost:8098 ADMIN_PASSWORD=TestPass123 bash test/smoke.sh
 ```
 
-`test/smoke.sh`（81 条断言，不需要 ffmpeg）——注册开关与验证码、可见性与广场过滤、
-双语 API、上传内容不可执行、最后一个管理员不可锁死、公开接口不泄露 IP、设置项越界
-钳制、隔离内容不可重传、配额与防盗链、越权边界、Range/路径穿越。
-
-验证码模块另有单元测试（不需要起服务）：
-
-```bash
-node --test test/captcha.test.mjs
-```
+`test/smoke.sh` — 88 assertions, no ffmpeg required. Covers registration and the
+CAPTCHA, visibility and gallery filtering, share-link formats, the bilingual API,
+uploads that must not be executable, the last administrator that must not be
+lockable, public endpoints that must not leak IPs, settings clamping, quarantined
+content that must not be re-uploadable, quotas and hotlink protection,
+authorization boundaries, and Range/path-traversal handling.
 
 ```bash
 DATA_DIR=/tmp/vh-pipe PORT=8097 ADMIN_PASSWORD=TestPass123 node server/server.js &
 BASE=http://localhost:8097 DATA_DIR=/tmp/vh-pipe bash test/pipeline.sh
 ```
 
-`test/pipeline.sh`（28 条断言，需要 ffmpeg）——自己用 ffmpeg 造素材，验证真实
-转码后公开链接不失效、水印像素级确实烧录、`max_width` 等比缩放、最低分辨率
-拦截、图片管线、本地鉴黄命中隔离。
+`test/pipeline.sh` — 28 assertions, needs ffmpeg. Generates its own footage, then
+checks that a public link survives a real transcode, that the watermark is
+genuinely burned into the pixels, that `max_width` scaling works, and that the
+minimum-resolution gate, image pipeline and local moderation all behave.
 
-## 🔒 安全说明
+The CAPTCHA module has unit tests that need no running server:
 
-- 会话 token 存于 `localStorage` 并通过 `Authorization` 头传递（无 Cookie ⇒ 无 CSRF 面）
-- 上传文件与门户同源，但非视频/图片一律 `Content-Disposition: attachment` +
-  `application/octet-stream`；`/v/` 响应带 `sandbox` CSP 与 `nosniff`
-- 系统始终保留至少一个可用管理员（降权/禁用/删除最后一个会被拒绝）
-- 「自定义 head / 页脚 / 广告」是**管理员自持的原始 HTML 注入点**，按设计不转义 ——
-  只应授予可信管理员
-- 自助注册默认**关闭**，开启后新账号一律是「上传员」；限速拆成两层——尝试次数
-  给宽松上限（防爆破），成功注册数按 `register_rate_limit` 严格计（防批量开号）
-- ⚠️ 内置验证码是**简单**方案：算术题用线段绘制，SVG 里不含文字，能挡住直接读
-  响应体的脚本；但 7 段式数字对真正的 OCR 抵抗力有限。公网商业部署建议换成
-  Cloudflare Turnstile / hCaptcha
-- ⚠️ 本地肤色鉴黄是启发式方案，误报漏报都不低（浅色墙面、沙滩易误判）。
-  商业场景请用「外部审核 API」模式对接专业内容安全服务
+```bash
+node --test test/captcha.test.mjs
+```
 
-## 🌏 双语
+## 🔒 Security notes
 
-界面语言首次访问跟随浏览器（`navigator.language`），之后记在 `localStorage`，
-右上角可随时切换。API 错误按 `Accept-Language` 返回对应语言，也可用 `?lang=zh|en`
-显式指定（显式优先）；服务端渲染的播放页同样如此。
+- Session tokens live in `localStorage` and travel in the `Authorization` header.
+  No cookies, so there is no CSRF surface.
+- Uploads share the portal's origin, but anything that is not video or image is
+  returned as `application/octet-stream` with `Content-Disposition: attachment`,
+  and every `/v/` response carries a `sandbox` CSP and `nosniff`.
+- The system always keeps at least one usable administrator — demoting,
+  disabling or deleting the last one is refused.
+- Custom head/footer/ad fields are **raw HTML injection points held by the
+  administrator** and are deliberately not escaped. Only grant admin to people
+  you trust with that.
+- Self-registration is **off** by default. When enabled, new accounts are always
+  uploaders. Rate limiting is split in two: attempts get a generous ceiling to
+  stop brute-forcing, while *successful* sign-ups are capped strictly by
+  `register_rate_limit` to stop bulk account creation — so a human who fumbles
+  the CAPTCHA is not locked out for an hour.
+- ⚠️ The built-in CAPTCHA is a **simple** measure. The arithmetic is drawn as
+  line segments and the SVG contains no text, so a script cannot read the answer
+  out of the response body — but seven-segment digits do not hold up to real OCR.
+  For a public commercial deployment, swap in Cloudflare Turnstile or hCaptcha.
+- ⚠️ Local skin-tone moderation is a heuristic with meaningful false-positive and
+  false-negative rates (pale walls and beaches trip it easily). For commercial
+  use, switch to the external moderation API mode and connect a real content
+  safety service.
 
-错误响应同时带机器可读的 `code`（如 `auth.badCredentials`），便于第三方集成自行本地化：
+## 🌏 Bilingual
+
+The UI language follows the browser (`navigator.language`) on a first visit,
+is then remembered in `localStorage`, and can be switched at any time from the
+header. API errors are returned in the language given by `Accept-Language`, and
+`?lang=zh|en` overrides it explicitly. The server-rendered player page follows
+the same rules.
+
+Error responses also carry a machine-readable `code`, so an integration can do
+its own localisation:
 
 ```json
 { "error": "Incorrect username or password", "code": "auth.badCredentials" }
 ```
 
-上传日志把消息按 `key|参数` 存库而不是存成品文案，所以切换语言时**历史日志**
-也会跟着变成对应语言。
+Upload logs store `key|params` rather than a finished sentence, so switching
+language re-renders **historical log rows** too.
 
-新增语言：在 `server/lib/i18n.js` 和 `frontend/src/i18n.ts` 的词表各加一列即可。
+To add a language, append a column to the tables in `server/lib/i18n.js` and
+`frontend/src/i18n.ts`.
 
-## 👁 可见性
+## 👁 Visibility
 
-每个文件有 `public` / `private` 两种可见性：
+Every file is either `public` or `private`:
 
-| | 广场列出 | 直链 / 播放页 / 嵌入 |
+| | Listed in the gallery | Direct link / player / embed |
 | --- | --- | --- |
-| 公开 | ✅ | ✅ |
-| 私有 | ❌ | ✅ |
+| Public | ✅ | ✅ |
+| Unlisted (`private`) | ❌ | ✅ |
 
-> ⚠️ **「私有」是「不列出」，不是「加锁」。** 视频床的链接必须能分享和嵌入，
-> 做成鉴权访问会直接废掉 embed。文件名是 sha256 前 16 位、不可枚举，实际隐私性
-> 足够日常使用，但**不要用来存敏感内容**。需要真正的访问控制请另开需求。
+> ⚠️ **"Unlisted" means unlisted, not locked.** A video host's links have to be
+> shareable and embeddable; putting them behind authentication would break embeds
+> outright. Filenames are the first 16 hex characters of the content's SHA-256 and
+> cannot be enumerated, which is private enough for everyday use — but **do not
+> use this for sensitive material**. Real access control is a separate feature.
 
-账号可在「我的 → 账号」设默认值，上传时也能临时改；管理员可在「设置 → 注册」
-设定新账号的默认值，并在视频列表里改任意文件的可见性。
+Users set their default under *My files → Account* and can override it per upload.
+Administrators set the default for new accounts under *Settings → Registration*,
+and can change the visibility of any file from the video list.
