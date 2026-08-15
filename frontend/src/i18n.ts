@@ -114,6 +114,7 @@ const D: Dict = {
   'exp.title': ['广场', 'Gallery'],
   'exp.searchPlaceholder': ['搜索标题…', 'Search titles…'],
   'exp.empty': ['还没有公开的内容。', 'Nothing public here yet.'],
+  'exp.closed': ['广场未开放。', 'The gallery is not open.'],
 
   // ---- stats ----
   'st.title': ['统计', 'Statistics'],
@@ -288,8 +289,8 @@ const D: Dict = {
   'set.tips': ['首页提示文案', 'Home page hint'],
   'set.domain': ['外链域名（留空 = 当前域名）', 'Link domain (blank = current origin)'],
   'set.description': ['站点描述', 'Site description'],
-  'set.noticeOn': ['开启全站公告', 'Show a site-wide notice'],
   'set.noticeHtml': ['支持 HTML', 'HTML allowed'],
+  'set.noticeOn': ['开启全站公告', 'Show a site-wide notice'],
   'set.register': ['👤 注册', '👤 Registration'],
   'set.allowRegister': ['开放自助注册', 'Allow self-service sign-up'],
   'set.registerCaptcha': ['注册需人机验证', 'Require verification to sign up'],

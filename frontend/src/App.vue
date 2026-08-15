@@ -6,7 +6,7 @@ import { LOCALES, locale, setLocale, t } from './i18n'
 import { useRouter } from 'vue-router'
 
 const router = useRouter()
-const title = computed(() => state.conf?.title || 'vidhub · 视频床')
+const title = computed(() => state.conf?.title || 'vidhub')
 const brand = computed(() => title.value.split('·')[0].trim() || 'vidhub')
 
 watch(title, t => { document.title = t }, { immediate: true })

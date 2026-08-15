@@ -386,7 +386,7 @@ onMounted(async () => {
           </div>
           <div class="field"><label>{{ t('set.description') }}</label><input v-model="settings.description" /></div>
           <label class="switch"><input type="checkbox" v-model="settings.notice_status" :true-value="1" :false-value="0" /><span class="knob" /><span class="sw-label">{{ t('set.noticeOn') }}</span></label>
-          <div class="field" v-if="settings.notice_status"><textarea v-model="settings.notice" placeholder="支持 HTML"></textarea></div>
+          <div class="field" v-if="settings.notice_status"><textarea v-model="settings.notice" :placeholder="t('set.noticeHtml')"></textarea></div>
         </div>
 
         <div class="set-section">

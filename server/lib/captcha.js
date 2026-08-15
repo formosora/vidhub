@@ -125,4 +125,3 @@ export function verifyCaptcha(id, input) {
   return String(input ?? '').trim() === rec.answer
 }
 
-export const pendingCaptchas = () => store.size

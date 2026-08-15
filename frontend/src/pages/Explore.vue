@@ -1,10 +1,11 @@
 <script setup lang="ts">
 import { onMounted, ref, watch } from 'vue'
 import { fmtDur, fmtSize, type VideoItem } from '../api'
-import { locale, t } from '../i18n'
+import { langHeader, locale, t } from '../i18n'
 
 const videos = ref<VideoItem[]>([])
 const loading = ref(true)
+const errKey = ref('')
 const q = ref('')
 const pageNum = ref(1)
 const total = ref(0)
@@ -12,12 +13,17 @@ const size = 24
 
 async function load() {
   loading.value = true
+  errKey.value = ''
   try {
-    const res = await fetch(`/api/public/videos?page=${pageNum.value}&size=${size}&q=${encodeURIComponent(q.value)}`)
+    const res = await fetch(`/api/public/videos?page=${pageNum.value}&size=${size}&q=${encodeURIComponent(q.value)}`,
+      { headers: langHeader() })
+    // Without this the 403 body fell through to `j.items || []` and the page
+    // claimed "nothing here yet" when the gallery was simply switched off.
+    if (!res.ok) { errKey.value = 'exp.closed'; videos.value = []; total.value = 0; return }
     const j = await res.json()
     videos.value = j.items || []
     total.value = j.total || 0
-  } finally { loading.value = false }
+  } catch { errKey.value = 'st.loadFailed' } finally { loading.value = false }
 }
 
 let debounce: number | undefined
@@ -38,6 +44,7 @@ const pages = () => Math.max(1, Math.ceil(total.value / size))
     </div>
 
     <p v-if="loading" class="muted">{{ t('c.loading') }}</p>
+    <p v-else-if="errKey" class="muted">{{ t(errKey) }}</p>
     <p v-else-if="videos.length === 0" class="muted">{{ t('exp.empty') }}</p>
 
     <div class="gallery">

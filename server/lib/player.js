@@ -65,4 +65,3 @@ ${conf('footer_code')}
 </body></html>`
 }
 
-export function imagePage(v) { return playerPage(v) }
