@@ -1,0 +1,13 @@
+# Normalise to LF in the repository. The test scripts are run inside the Linux
+# container and by bash on Windows — a CRLF checkout breaks them outright with
+# "$'\r': command not found".
+* text=auto eol=lf
+*.sh   text eol=lf
+*.mjs  text eol=lf
+
+# Binary
+*.png  binary
+*.jpg  binary
+*.ico  binary
+*.woff binary
+*.woff2 binary

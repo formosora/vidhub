@@ -1,83 +1,72 @@
+/**
+ * vidhub — commercial self-hosted video bed.
+ * Zero npm dependencies: Node's built-in http + node:sqlite + external ffmpeg.
+ */
 import http from 'node:http'
-import {
-  createReadStream, createWriteStream, existsSync, mkdirSync, readFileSync,
-  renameSync, statSync, unlinkSync, writeFileSync,
-} from 'node:fs'
-import { createHash, randomUUID } from 'node:crypto'
-import { dirname, extname, join, normalize } from 'node:path'
+import { createReadStream, existsSync, readFileSync, statSync } from 'node:fs'
+import { extname, join, normalize, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
+
+import { q } from './lib/db.js'
+import { ensureAdmin } from './lib/auth.js'
+import { handleApi } from './lib/routes.js'
+import { findFile, thumbPath, resumeJobs } from './lib/upload.js'
+import { playerPage } from './lib/player.js'
+import { leechBlocked } from './lib/security.js'
+import { send, clientIp } from './lib/util.js'
+import { t, lang } from './lib/i18n.js'
+import { hasFfmpeg } from './lib/media.js'
 
 const ROOT = dirname(fileURLToPath(import.meta.url))
 const PORT = Number(process.env.PORT || 8080)
-const DATA_DIR = process.env.DATA_DIR || join(ROOT, 'data')
-const VIDEOS_DIR = join(DATA_DIR, 'videos')
-const META_FILE = join(DATA_DIR, 'videos.json')
 const WWWROOT = join(ROOT, 'wwwroot')
-const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'change-me'
-const MAX_UPLOAD = Number(process.env.MAX_UPLOAD_MB || 500) * 1024 * 1024
 
-mkdirSync(VIDEOS_DIR, { recursive: true })
-
-const ALLOWED = new Set(['mp4', 'webm', 'mov', 'm4v', 'mkv', 'avi'])
-const MIME = {
+/**
+ * Two separate MIME tables on purpose.
+ *
+ * MEDIA_MIME covers *user-uploaded* bytes and deliberately contains only inert
+ * video/image types — no html/js/css/svg. Anything not on this list is served as
+ * an octet-stream attachment, so an uploaded .html (or .svg) can never execute
+ * script on this origin and steal the session token out of localStorage.
+ */
+const MEDIA_MIME = {
   '.mp4': 'video/mp4', '.m4v': 'video/mp4', '.webm': 'video/webm',
   '.mov': 'video/quicktime', '.mkv': 'video/x-matroska', '.avi': 'video/x-msvideo',
+  '.ts': 'video/mp2t', '.flv': 'video/x-flv', '.wmv': 'video/x-ms-wmv', '.3gp': 'video/3gpp',
+  '.mpg': 'video/mpeg', '.mpeg': 'video/mpeg',
+  '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.png': 'image/png', '.gif': 'image/gif',
+  '.webp': 'image/webp', '.bmp': 'image/bmp',
+}
+
+/** STATIC_MIME covers only our own built frontend assets under wwwroot/. */
+const STATIC_MIME = {
   '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8',
-  '.css': 'text/css; charset=utf-8', '.png': 'image/png', '.jpg': 'image/jpeg',
-  '.svg': 'image/svg+xml', '.ico': 'image/x-icon',
+  '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml', '.ico': 'image/x-icon',
+  '.png': 'image/png', '.jpg': 'image/jpeg', '.webp': 'image/webp',
+  '.woff': 'font/woff', '.woff2': 'font/woff2', '.json': 'application/json; charset=utf-8',
 }
 
-const loadMeta = () => (existsSync(META_FILE) ? JSON.parse(readFileSync(META_FILE, 'utf8')) : {})
-const saveMeta = m => writeFileSync(META_FILE, JSON.stringify(m, null, 2))
-
-const tokens = new Map()
-const authed = req => {
-  const exp = tokens.get((req.headers.authorization || '').replace('Bearer ', ''))
-  return !!exp && exp > Date.now()
+/** Hardening applied to every response. */
+const BASE_HEADERS = {
+  'X-Content-Type-Options': 'nosniff',
+  'Referrer-Policy': 'strict-origin-when-cross-origin',
 }
 
-function send(res, code, body, type = 'application/json; charset=utf-8', headers = {}) {
-  res.writeHead(code, { 'Content-Type': type, ...headers })
-  res.end(typeof body === 'string' || Buffer.isBuffer(body) ? body : JSON.stringify(body))
+/** Extra lockdown for user-uploaded bytes: no scripts, no embedding context. */
+const MEDIA_HEADERS = {
+  ...BASE_HEADERS,
+  'Content-Security-Policy': "default-src 'none'; media-src 'self'; img-src 'self'; sandbox",
 }
 
-const readBody = (req, max = 1_000_000) =>
-  new Promise((resolve, reject) => {
-    let data = ''
-    req.on('data', c => {
-      data += c
-      if (data.length > max) req.destroy()
-    })
-    req.on('end', () => resolve(data))
-    req.on('error', reject)
-  })
-
-/** Stream an upload to disk with a rolling sha256 — never buffers the whole file. */
-function streamUpload(req, tmpPath) {
-  return new Promise((resolve, reject) => {
-    const hash = createHash('sha256')
-    let size = 0
-    const ws = createWriteStream(tmpPath)
-    req.on('data', c => {
-      size += c.length
-      if (size > MAX_UPLOAD) {
-        req.destroy()
-        ws.destroy()
-        try { unlinkSync(tmpPath) } catch {}
-        return reject(new Error('too large'))
-      }
-      hash.update(c)
-      ws.write(c)
-    })
-    req.on('end', () => ws.end(() => resolve({ size, hash: hash.digest('hex').slice(0, 16) })))
-    req.on('error', reject)
-  })
-}
+ensureAdmin()
+hasFfmpeg().then(ok => {
+  console.log(`[vidhub] ffmpeg: ${ok ? 'available' : 'MISSING — degraded mode'}`)
+  resumeJobs()      // re-queue anything left mid-pipeline by a restart
+})
 
 /** RFC 7233 single-range streaming — required for seeking in <video>. */
-function serveVideo(req, res, file) {
+function serveRange(req, res, file, type, extra = {}) {
   const size = statSync(file).size
-  const type = MIME[extname(file).toLowerCase()] || 'application/octet-stream'
   const range = req.headers.range
   if (range) {
     const m = range.match(/bytes=(\d*)-(\d*)/)
@@ -88,10 +77,11 @@ function serveVideo(req, res, file) {
       if (isNaN(end) || end >= size) end = size - 1
       if (isNaN(start)) start = 0
       if (start > end || start >= size) {
-        res.writeHead(416, { 'Content-Range': `bytes */${size}` })
+        res.writeHead(416, { ...extra, 'Content-Range': `bytes */${size}` })
         return res.end()
       }
       res.writeHead(206, {
+        ...extra,
         'Content-Type': type,
         'Content-Range': `bytes ${start}-${end}/${size}`,
         'Accept-Ranges': 'bytes',
@@ -100,146 +90,107 @@ function serveVideo(req, res, file) {
       return createReadStream(file, { start, end }).pipe(res)
     }
   }
-  res.writeHead(200, {
-    'Content-Type': type,
-    'Accept-Ranges': 'bytes',
-    'Content-Length': size,
-  })
+  res.writeHead(200, { ...extra, 'Content-Type': type, 'Accept-Ranges': 'bytes', 'Content-Length': size })
   createReadStream(file).pipe(res)
 }
 
-const playerPage = (name, orig) => `<!doctype html>
-<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>${orig}</title>
-<style>body{margin:0;background:#000;display:flex;align-items:center;justify-content:center;min-height:100vh}
-video{max-width:100%;max-height:100vh;outline:none}</style></head>
-<body><video src="/v/${name}" controls autoplay playsinline></video></body></html>`
+const validName = n => /^[\w.-]+$/.test(n) && !n.includes('..')
 
-async function handleApi(req, res, path, url) {
-  if (path === '/api/login' && req.method === 'POST') {
-    const body = JSON.parse(await readBody(req).catch(() => '{}'))
-    if (body.password !== ADMIN_PASSWORD) return send(res, 401, { error: 'unauthorized' })
-    const token = randomUUID().replaceAll('-', '')
-    tokens.set(token, Date.now() + 12 * 3600_000)
-    return send(res, 200, { token })
-  }
+function loadVideo(name) {
+  if (!validName(name)) return null
+  return q.get('SELECT * FROM videos WHERE name = ?', name)
+}
 
-  // public listing for the explore page (no auth, no secrets)
-  if (path === '/api/public/videos' && req.method === 'GET') {
-    const meta = loadMeta()
-    return send(res, 200, Object.entries(meta).map(([name, m]) => ({ name, ...m })))
-  }
+/**
+ * View counting, de-duplicated per (viewer, video) for an hour so a reload loop
+ * — or anyone curling the stream URL — can't inflate the counter.
+ */
+const seen = new Map()          // `${ip}|${name}` -> expiry ms
+const VIEW_WINDOW = 3600_000
 
-  // site statistics (public)
-  if (path === '/api/stats' && req.method === 'GET') {
-    const meta = loadMeta()
-    const items = Object.values(meta)
-    const byDay = {}
-    let totalSize = 0
-    for (const m of items) {
-      const day = (m.uploaded || '').slice(0, 10)
-      if (!day) continue
-      byDay[day] = byDay[day] || { date: day, count: 0, size: 0 }
-      byDay[day].count++
-      byDay[day].size += m.size || 0
-      totalSize += m.size || 0
-    }
-    return send(res, 200, {
-      total: items.length,
-      totalSize,
-      byDay: Object.values(byDay).sort((a, b) => (a.date < b.date ? -1 : 1)),
-    })
-  }
-
-  if (path === '/api/admin/check')
-    return authed(req) ? send(res, 200, { ok: true }) : send(res, 401, { error: 'unauthorized' })
-
-  if (path === '/api/videos' && req.method === 'GET') {
-    if (!authed(req)) return send(res, 401, { error: 'unauthorized' })
-    const meta = loadMeta()
-    return send(res, 200, Object.entries(meta).map(([name, m]) => ({ name, ...m })))
-  }
-
-  if (path === '/api/videos' && req.method === 'POST') {
-    if (!authed(req)) return send(res, 401, { error: 'unauthorized' })
-    const orig = (url.searchParams.get('name') || 'video.mp4').replace(/[^\w.-]/g, '_')
-    const ext = (orig.match(/\.(\w{2,5})$/)?.[1] || '').toLowerCase()
-    if (!ALLOWED.has(ext)) return send(res, 400, { error: 'unsupported type' })
-
-    const tmp = join(VIDEOS_DIR, `.uploading-${Date.now()}`)
-    let result
-    try {
-      result = await streamUpload(req, tmp)
-    } catch (e) {
-      return send(res, 413, { error: e.message })
-    }
-    const name = `${result.hash}.${ext}`
-    renameSync(tmp, join(VIDEOS_DIR, name))
-    const meta = loadMeta()
-    meta[name] = { orig, size: result.size, uploaded: new Date().toISOString() }
-    saveMeta(meta)
-    return send(res, 200, {
-      name,
-      size: result.size,
-      url: `/v/${name}`,
-      player: `/p/${name}`,
-      embed: `<iframe src="/p/${name}" width="640" height="360" frameborder="0" allowfullscreen></iframe>`,
-    })
-  }
-
-  const del = path.match(/^\/api\/videos\/([\w.-]+)$/)
-  if (del && req.method === 'DELETE') {
-    if (!authed(req)) return send(res, 401, { error: 'unauthorized' })
-    const file = join(VIDEOS_DIR, del[1])
-    if (existsSync(file)) unlinkSync(file)
-    const meta = loadMeta()
-    delete meta[del[1]]
-    saveMeta(meta)
-    return send(res, 200, { ok: true })
-  }
-
-  return send(res, 404, { error: 'not found' })
+function countView(ip, name) {
+  const now = Date.now()
+  if (seen.size > 20_000) for (const [k, exp] of seen) if (exp < now) seen.delete(k)
+  const key = `${ip}|${name}`
+  if ((seen.get(key) || 0) > now) return
+  seen.set(key, now + VIEW_WINDOW)
+  q.run('UPDATE videos SET views = views + 1 WHERE name = ?', name)
 }
 
 http.createServer(async (req, res) => {
   try {
     const url = new URL(req.url, 'http://x')
-    const path = decodeURIComponent(url.pathname)
+    let path
+    try { path = decodeURIComponent(url.pathname) }
+    catch { return send(res, 400, 'bad request', 'text/plain', BASE_HEADERS) }
 
     if (path.startsWith('/api/')) return await handleApi(req, res, path, url)
 
-    // video stream (public, with Range support)
-    if (path.startsWith('/v/')) {
+    // ---- media stream (public for ok items; admin/owner for flagged) ----
+    if (path.startsWith('/v/') || path.startsWith('/d/')) {
       const name = path.slice(3)
-      if (!/^[\w.-]+$/.test(name)) return send(res, 400, 'bad name', 'text/plain')
-      const file = join(VIDEOS_DIR, name)
-      if (!existsSync(file)) return send(res, 404, 'not found', 'text/plain')
-      return serveVideo(req, res, file)
+      const v = loadVideo(name)
+      if (!v || v.status === 'recycled') return send(res, 404, 'not found', 'text/plain', MEDIA_HEADERS)
+      if (v.status === 'banned') return send(res, 451, 'content under review', 'text/plain', MEDIA_HEADERS)
+      if (leechBlocked(req)) return send(res, 403, 'hotlink blocked', 'text/plain', MEDIA_HEADERS)
+      const file = findFile(v)
+      if (!file) return send(res, 404, 'not found', 'text/plain', MEDIA_HEADERS)
+
+      const headers = { ...MEDIA_HEADERS }
+      // Only inert media types render inline. Everything else (and every /d/
+      // request) is forced to download as an opaque blob.
+      const type = MEDIA_MIME[extname(file).toLowerCase()]
+      const download = !type || path.startsWith('/d/')
+      if (download) {
+        headers['Content-Disposition'] =
+          `attachment; filename*=UTF-8''${encodeURIComponent(v.orig || name)}`
+      }
+      if (!download) {
+        const range = req.headers.range || ''
+        if (!range || /^bytes=0-/.test(range)) countView(clientIp(req), name)
+      }
+      return serveRange(req, res, file, type || 'application/octet-stream', headers)
     }
 
-    // shareable player page
+    // ---- thumbnail ----
+    if (path.startsWith('/t/')) {
+      const name = path.slice(3)
+      if (!validName(name)) return send(res, 400, 'bad name', 'text/plain', BASE_HEADERS)
+      const v = q.get('SELECT status FROM videos WHERE name = ?', name)
+      const tp = thumbPath(name)
+      if (!v || v.status !== 'ok' || !existsSync(tp)) return send(res, 404, 'not found', 'text/plain', BASE_HEADERS)
+      res.writeHead(200, { ...MEDIA_HEADERS, 'Content-Type': 'image/jpeg', 'Cache-Control': 'public, max-age=86400' })
+      return createReadStream(tp).pipe(res)
+    }
+
+    // ---- player page (embeddable by design → no X-Frame-Options here) ----
     if (path.startsWith('/p/')) {
       const name = path.slice(3)
-      if (!/^[\w.-]+$/.test(name)) return send(res, 400, 'bad name', 'text/plain')
-      const file = join(VIDEOS_DIR, name)
-      if (!existsSync(file)) return send(res, 404, 'not found', 'text/plain')
-      const orig = loadMeta()[name]?.orig || name
-      return send(res, 200, playerPage(name, orig), 'text/html; charset=utf-8')
+      const v = loadVideo(name)
+      const L = lang(req, url)
+      if (!v || v.status === 'recycled') return send(res, 404, t(L, 'c.notFound'), 'text/plain', BASE_HEADERS)
+      if (v.status === 'banned')
+        return send(res, 451, `<h1>${t(L, 'c.underReview')}</h1>`, 'text/html; charset=utf-8', BASE_HEADERS)
+      return send(res, 200, playerPage(v, L), 'text/html; charset=utf-8', BASE_HEADERS)
     }
 
-    // static + SPA fallback
+    // ---- static + SPA fallback ----
     let file = normalize(join(WWWROOT, path))
-    if (!file.startsWith(WWWROOT)) return send(res, 403, 'forbidden', 'text/plain')
+    if (!file.startsWith(WWWROOT)) return send(res, 403, 'forbidden', 'text/plain', BASE_HEADERS)
     if (existsSync(file) && statSync(file).isDirectory()) file = join(file, 'index.html')
     if (!existsSync(file) || !statSync(file).isFile()) {
-      if (extname(path)) return send(res, 404, 'not found', 'text/plain')
+      if (extname(path)) return send(res, 404, 'not found', 'text/plain', BASE_HEADERS)
       file = join(WWWROOT, 'index.html')
     }
     const ext = extname(file).toLowerCase()
     const cache = path.startsWith('/assets/') ? 'public, max-age=31536000, immutable' : 'no-cache'
-    send(res, 200, readFileSync(file), MIME[ext] || 'application/octet-stream', { 'Cache-Control': cache })
+    send(res, 200, readFileSync(file), STATIC_MIME[ext] || 'application/octet-stream', {
+      ...BASE_HEADERS,
+      'X-Frame-Options': 'SAMEORIGIN',      // the admin SPA must not be framed
+      'Cache-Control': cache,
+    })
   } catch (err) {
     console.error(err)
     send(res, 500, { error: 'internal' })
   }
-}).listen(PORT, () => console.log(`vidhub on :${PORT}, data at ${DATA_DIR}`))
+}).listen(PORT, () => console.log(`vidhub on :${PORT}`))

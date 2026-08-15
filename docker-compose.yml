@@ -5,10 +5,19 @@ services:
     ports:
       - "8081:8080"
     environment:
+      # 首次启动创建 admin 账号的密码（仅第一次生效，之后请在后台修改）
       ADMIN_PASSWORD: ${ADMIN_PASSWORD:-change-me}
+      # 位于 nginx/cloudflare 等反代之后时保持 1，用于获取真实访客 IP
+      TRUST_PROXY: ${TRUST_PROXY:-1}
     volumes:
       - vidhub-data:/app/data
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8080/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
 
 volumes:
   vidhub-data:

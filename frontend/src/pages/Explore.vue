@@ -1,48 +1,63 @@
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
-
-interface VideoItem {
-  name: string
-  orig?: string
-  size: number
-  uploaded: string
-}
+import { onMounted, ref, watch } from 'vue'
+import { fmtDur, fmtSize, type VideoItem } from '../api'
+import { locale, t } from '../i18n'
 
 const videos = ref<VideoItem[]>([])
 const loading = ref(true)
+const q = ref('')
+const pageNum = ref(1)
+const total = ref(0)
+const size = 24
 
-const fmtSize = (n: number) =>
-  n > 1 << 30 ? (n / (1 << 30)).toFixed(2) + ' GB' : (n / (1 << 20)).toFixed(1) + ' MB'
-
-onMounted(async () => {
+async function load() {
+  loading.value = true
   try {
-    const res = await fetch('/api/public/videos')
-    const list = (await res.json()) as VideoItem[]
-    videos.value = list.sort((a, b) => (a.uploaded < b.uploaded ? 1 : -1))
-  } finally {
-    loading.value = false
-  }
-})
+    const res = await fetch(`/api/public/videos?page=${pageNum.value}&size=${size}&q=${encodeURIComponent(q.value)}`)
+    const j = await res.json()
+    videos.value = j.items || []
+    total.value = j.total || 0
+  } finally { loading.value = false }
+}
+
+let debounce: number | undefined
+watch(q, () => { clearTimeout(debounce); debounce = window.setTimeout(() => { pageNum.value = 1; load() }, 350) })
+watch(pageNum, load)
+watch(locale, load)          // server-side messages depend on the language
+onMounted(load)
+
+const pages = () => Math.max(1, Math.ceil(total.value / size))
 </script>
 
 <template>
   <div class="fade-up">
-    <h1 style="margin:.5rem 0 1.4rem">广场</h1>
+    <div class="row" style="margin:.5rem 0 1.4rem">
+      <h1 style="margin:0">{{ t('exp.title') }}</h1>
+      <span class="grow"></span>
+      <input v-model="q" :placeholder="t('exp.searchPlaceholder')" style="background:rgba(0,0,0,.28);border:1px solid var(--glass-border);color:var(--text);border-radius:10px;padding:.5rem .8rem;outline:none" />
+    </div>
 
-    <p v-if="loading" class="muted">加载中…</p>
-    <p v-else-if="videos.length === 0" class="muted">还没有视频。</p>
+    <p v-if="loading" class="muted">{{ t('c.loading') }}</p>
+    <p v-else-if="videos.length === 0" class="muted">{{ t('exp.empty') }}</p>
 
     <div class="gallery">
-      <a v-for="v in videos" :key="v.name" class="glass-card vcard" :href="`/p/${v.name}`" target="_blank">
+      <a v-for="v in videos" :key="v.name" class="glass-card vcard" :href="v.player" target="_blank">
         <div class="thumb">
-          <video :src="`/v/${v.name}`" preload="metadata" muted />
+          <img v-if="v.thumb" :src="v.thumb" loading="lazy" style="width:100%;height:100%;object-fit:cover" @error="($event.target as HTMLImageElement).style.display = 'none'" />
           <div class="play-badge">▶</div>
+          <span v-if="v.duration" style="position:absolute;right:6px;bottom:6px;background:#000a;padding:1px 6px;border-radius:6px;font-size:.7rem">{{ fmtDur(v.duration) }}</span>
         </div>
         <div class="vinfo">
           <b>{{ v.orig || v.name }}</b>
-          <small>{{ fmtSize(v.size) }} · {{ v.uploaded.slice(0, 10) }}</small>
+          <small>{{ fmtSize(v.size) }} · {{ t('c.views', v.views) }} · {{ v.uploaded.slice(0, 10) }}</small>
         </div>
       </a>
+    </div>
+
+    <div v-if="pages() > 1" class="pager">
+      <button class="btn ghost sm" :disabled="pageNum <= 1" @click="pageNum--">{{ t('c.prev') }}</button>
+      <span>{{ pageNum }} / {{ pages() }}</span>
+      <button class="btn ghost sm" :disabled="pageNum >= pages()" @click="pageNum++">{{ t('c.next') }}</button>
     </div>
   </div>
 </template>
