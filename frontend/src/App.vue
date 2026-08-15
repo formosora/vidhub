@@ -73,7 +73,12 @@ onMounted(ensureSite)
     </main>
 
     <footer class="foot">
-      <div class="wrap">{{ title }} — {{ t('foot.tagline') }}</div>
+      <div class="wrap">
+        {{ title }} — {{ t('foot.tagline') }}
+        <template v-if="state.conf?.terms">
+          · <RouterLink to="/terms">{{ t('terms.link') }}</RouterLink>
+        </template>
+      </div>
     </footer>
 
     <div class="toast" :class="{ show: toastVisible, ok: toastOk, bad: !toastOk }">{{ toastText }}</div>

@@ -102,6 +102,30 @@ ck "quota msg zh" "该 IP 超过每日上传上限" "$(curl -s -X PUT $B/api/adm
 ck "quota msg en" "daily upload limit" "$(curl -s -H 'Accept-Language: en-US' -X POST "$B/api/videos?name=qz.mp4" "${A[@]}" --data-binary @qz.mp4)"
 curl -s -X PUT $B/api/admin/settings "${A[@]}" -H 'Content-Type: application/json' -d '{"daily_limit_ip":0}' -o/dev/null
 
+echo "== UTF-8 across chunk boundaries =="
+# A multi-byte payload far larger than one socket chunk. Decoding each chunk
+# separately corrupts every character that straddles a boundary.
+node -e "
+const big = '中文测试内容'.repeat(20000);
+require('fs').writeFileSync('utf8.json', JSON.stringify({ terms: big }), 'utf8');
+"
+curl -s -X PUT $B/api/admin/settings "${A[@]}" -H 'Content-Type: application/json' --data-binary @utf8.json -o /dev/null
+ck "long CJK survives the round trip" "OK" "$(node -e "
+const { execFileSync } = require('child_process');
+const raw = execFileSync('curl', ['-s', process.argv[1] + '/api/config/public'], { maxBuffer: 1e8, encoding: 'buffer' });
+const t = JSON.parse(raw.toString('utf8')).terms || '';
+const want = '中文测试内容'.repeat(20000);
+console.log(t === want ? 'OK' : 'CORRUPTED len=' + t.length + ' replacements=' + (t.match(/�/g) || []).length);
+" "$B")"
+curl -s -X PUT $B/api/admin/settings "${A[@]}" -H 'Content-Type: application/json' -d '{"terms":""}' -o /dev/null
+
+echo "== terms page =="
+curl -s -X PUT $B/api/admin/settings "${A[@]}" -H 'Content-Type: application/json' -d '{"terms":"<p>hello terms</p>"}' -o /dev/null
+ck "terms exposed publicly" "hello terms" "$(curl -s $B/api/config/public)"
+ck "theme key is gone"      "" "$(curl -s $B/api/config/public | grep -o '\"theme\"')"
+ck "theme cannot be set"    "" "$(curl -s -X PUT $B/api/admin/settings "${A[@]}" -H 'Content-Type: application/json' -d '{"theme":"light"}' -o /dev/null; curl -s $B/api/admin/settings "${A[@]}" | grep -o '\"theme\"')"
+curl -s -X PUT $B/api/admin/settings "${A[@]}" -H 'Content-Type: application/json' -d '{"terms":""}' -o /dev/null
+
 echo "== recycle bin scoping =="
 head -c 21000 /dev/urandom > bin1.mp4
 head -c 22000 /dev/urandom > bin2.mp4

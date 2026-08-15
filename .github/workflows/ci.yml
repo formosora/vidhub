@@ -1,0 +1,110 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  frontend:
+    name: Frontend typecheck & build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
+        working-directory: frontend
+      - run: npm run typecheck
+        working-directory: frontend
+      - run: npm run build
+        working-directory: frontend
+
+      # The prebuilt SPA under server/wwwroot is committed so `node server.js`
+      # works without a build step. If it drifts from the sources, a plain
+      # checkout serves a stale UI — so make that a build failure, not a
+      # surprise in production.
+      - name: server/wwwroot matches a fresh build
+        run: |
+          if ! diff -r frontend/dist server/wwwroot > /dev/null 2>&1; then
+            echo "::error::server/wwwroot is out of date. Run:"
+            echo "  cd frontend && npm run build && rm -rf ../server/wwwroot && cp -r dist ../server/wwwroot"
+            diff -r frontend/dist server/wwwroot || true
+            exit 1
+          fi
+
+  unit:
+    name: Unit tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 24 }
+      - run: node --no-warnings --test test/captcha.test.mjs
+
+  smoke:
+    name: API smoke tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 24 }
+      - name: Start the server on a throwaway data directory
+        run: |
+          DATA_DIR="${RUNNER_TEMP}/vh-smoke" PORT=8098 ADMIN_PASSWORD=TestPass123 \
+            node --no-warnings server/server.js &
+          for i in $(seq 1 30); do
+            curl -sf http://localhost:8098/api/health > /dev/null && exit 0
+            sleep 1
+          done
+          echo "server did not come up"; exit 1
+      - run: BASE=http://localhost:8098 ADMIN_PASSWORD=TestPass123 bash test/smoke.sh
+
+  pipeline:
+    name: ffmpeg pipeline tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 24 }
+      - run: sudo apt-get update && sudo apt-get install -y ffmpeg
+      - run: ffmpeg -version | head -1
+      - name: Start the server on a throwaway data directory
+        run: |
+          DATA_DIR="${RUNNER_TEMP}/vh-pipe" PORT=8097 ADMIN_PASSWORD=TestPass123 \
+            node --no-warnings server/server.js &
+          for i in $(seq 1 30); do
+            curl -sf http://localhost:8097/api/health > /dev/null && exit 0
+            sleep 1
+          done
+          echo "server did not come up"; exit 1
+      - run: |
+          BASE=http://localhost:8097 DATA_DIR="${RUNNER_TEMP}/vh-pipe" \
+            bash test/pipeline.sh
+
+  docker:
+    name: Docker image builds
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker build -t vidhub:ci .
+      - name: Container starts and answers its healthcheck
+        run: |
+          docker run -d --name vidhub-ci -p 8080:8080 -e ADMIN_PASSWORD=TestPass123 vidhub:ci
+          for i in $(seq 1 30); do
+            if curl -sf http://localhost:8080/api/health > /dev/null; then
+              curl -s http://localhost:8080/api/admin/check \
+                -H "Authorization: Bearer $(curl -s -X POST http://localhost:8080/api/login \
+                  -H 'Content-Type: application/json' \
+                  -d '{"username":"admin","password":"TestPass123"}' \
+                  | sed 's/.*"token":"\([^"]*\)".*/\1/')"
+              docker rm -f vidhub-ci > /dev/null
+              exit 0
+            fi
+            sleep 2
+          done
+          docker logs vidhub-ci; exit 1

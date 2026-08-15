@@ -145,7 +145,7 @@ DATA_DIR=/tmp/vh-test PORT=8098 ADMIN_PASSWORD=TestPass123 node server/server.js
 BASE=http://localhost:8098 ADMIN_PASSWORD=TestPass123 bash test/smoke.sh
 ```
 
-`test/smoke.sh`（108 条断言，不需要 ffmpeg）——注册开关与验证码、可见性与广场过滤、
+`test/smoke.sh`（112 条断言，不需要 ffmpeg）——注册开关与验证码、可见性与广场过滤、
 分享链接格式、双语 API、上传内容不可执行、最后一个管理员不可锁死、公开接口不泄露
 IP、设置项越界钳制、隔离内容不可重传、配额与防盗链、越权边界、Range/路径穿越。
 

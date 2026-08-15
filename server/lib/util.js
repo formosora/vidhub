@@ -19,7 +19,13 @@ export function send(res, code, body, type = 'application/json; charset=utf-8', 
  */
 export const readBody = (req, max = 2_000_000) =>
   new Promise((resolve, reject) => {
-    let data = '', read = 0, done = false, over = false
+    // Chunks are collected as Buffers and decoded once at the end. Appending
+    // each chunk to a string instead decodes them independently, so any
+    // multi-byte character straddling a chunk boundary is replaced with U+FFFD
+    // — which silently corrupted long non-ASCII settings such as the notice,
+    // the terms text and custom head/footer code.
+    const chunks = []
+    let read = 0, done = false, over = false
     const settle = (fn, arg) => { if (!done) { done = true; fn(arg) } }
     const tooLarge = () => Object.assign(new Error('body too large'), { code: 'E_TOO_LARGE' })
 
@@ -31,10 +37,10 @@ export const readBody = (req, max = 2_000_000) =>
       // error response still reaches the client instead of a bare socket reset.
       // Beyond a small multiple of the cap the client is clearly abusive — cut it.
       if (over) { if (read > max * 2) req.destroy(); return }
-      data += c
-      if (data.length > max) { over = true; settle(reject, tooLarge()) }
+      chunks.push(c)
+      if (read > max) { over = true; chunks.length = 0; settle(reject, tooLarge()) }
     })
-    req.on('end', () => settle(resolve, data))
+    req.on('end', () => settle(resolve, Buffer.concat(chunks).toString('utf8')))
     req.on('aborted', () => settle(reject, new Error('body aborted')))
     req.on('close', () => settle(reject, new Error('body closed')))
     req.on('error', e => settle(reject, e))

@@ -7,7 +7,7 @@ export const getToken = () => localStorage.getItem(TOKEN_KEY) || ''
 export const setToken = (t: string) => t ? localStorage.setItem(TOKEN_KEY, t) : localStorage.removeItem(TOKEN_KEY)
 
 export interface PublicConf {
-  title: string; keywords: string; description: string; tips: string; theme: string
+  title: string; keywords: string; description: string; tips: string
   notice: string; notice_status: number; custom_head: string; footer_code: string; terms: string
   domain: string
   must_login: number; allow_guest: number; max_size_mb: number; max_upload_files: number

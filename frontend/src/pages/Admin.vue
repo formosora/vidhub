@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { onMounted, ref, watch } from 'vue'
-import { useRouter } from 'vue-router'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { onBeforeRouteLeave, useRouter } from 'vue-router'
 import { api, absUrl, ensureSite, fmtDur, fmtSize, state, type VideoItem, type Visibility } from '../api'
 import { locale, t, tLog } from '../i18n'
 import { linkFor } from '../links'
@@ -38,16 +38,18 @@ const vTotal = ref(0)
 const vPage = ref(1)
 const vQ = ref('')
 const vStatus = ref('')
+const vVis = ref('')
 const vSize = 15
 
 async function loadVideos() {
-  const res = await api(`/api/videos?all=1&page=${vPage.value}&size=${vSize}&q=${encodeURIComponent(vQ.value)}&status=${vStatus.value}`)
+  const res = await api(`/api/videos?all=1&page=${vPage.value}&size=${vSize}`
+    + `&q=${encodeURIComponent(vQ.value)}&status=${vStatus.value}&visibility=${vVis.value}`)
   if (!res.ok) return
   const j = await res.json()
   videos.value = j.items || []
   vTotal.value = j.total || 0
 }
-watch([tab, vPage, vStatus], () => { if (tab.value === 'videos') loadVideos() })
+watch([tab, vPage, vStatus, vVis], () => { if (tab.value === 'videos') loadVideos() })
 let vDeb: number | undefined
 watch(vQ, () => { clearTimeout(vDeb); vDeb = window.setTimeout(() => { vPage.value = 1; loadVideos() }, 350) })
 
@@ -166,14 +168,29 @@ async function delHash(h: HashBlack) { await api(`/api/admin/hashblack/${h.sha25
 // ================= settings =================
 const settings = ref<Record<string, any>>({})
 const saving = ref(false)
-async function loadSettings() { settings.value = await (await api('/api/admin/settings')).json() }
+/** Snapshot of what the server last confirmed, so we can detect edits. */
+const savedSnapshot = ref('')
+const dirty = computed(() => savedSnapshot.value && JSON.stringify(settings.value) !== savedSnapshot.value)
+
+async function loadSettings() {
+  settings.value = await (await api('/api/admin/settings')).json()
+  savedSnapshot.value = JSON.stringify(settings.value)
+}
 async function saveSettings() {
   saving.value = true
-  const res = await api('/api/admin/settings', { method: 'PUT', body: JSON.stringify(settings.value) })
+  const body = JSON.stringify(settings.value)
+  const res = await api('/api/admin/settings', { method: 'PUT', body })
   saving.value = false
-  if (res.ok) toast(t('ad.saved'))
+  if (res.ok) { savedSnapshot.value = body; toast(t('ad.saved')) }
   else toast(t('ad.saveFailed'), false)
 }
+
+// The settings form is long; losing it to a stray click or a closed tab is
+// the kind of thing people only notice after the work is gone.
+const warnUnsaved = (e: BeforeUnloadEvent) => { if (dirty.value) { e.preventDefault(); e.returnValue = '' } }
+onMounted(() => window.addEventListener('beforeunload', warnUnsaved))
+onBeforeUnmount(() => window.removeEventListener('beforeunload', warnUnsaved))
+onBeforeRouteLeave(() => dirty.value ? confirm(t('ad.leaveConfirm')) : true)
 
 function reload(which = tab.value) {
   if (which === 'dash') loadDash()
@@ -183,7 +200,10 @@ function reload(which = tab.value) {
   if (which === 'security') loadSecurity()
   if (which === 'settings') loadSettings()
 }
-watch(tab, reload)
+watch(tab, (to, from) => {
+  if (from === 'settings' && dirty.value && !confirm(t('ad.leaveConfirm'))) { tab.value = 'settings'; return }
+  reload(to)
+})
 watch(locale, () => reload())        // pull server-rendered strings in the new language
 
 async function setVideoVisibility(v: VideoItem, vis: Visibility) {
@@ -259,6 +279,11 @@ onMounted(async () => {
         <select v-model="vStatus" style="background:rgba(0,0,0,.28);border:1px solid var(--glass-border);color:var(--text);border-radius:10px;padding:.5rem .8rem;outline:none">
           <option value="">{{ t('ad.allStatus') }}</option><option value="ok">{{ t('s.ok') }}</option>
           <option value="processing">{{ t('s.processing') }}</option><option value="banned">{{ t('s.banned') }}</option>
+        </select>
+        <select v-model="vVis" style="background:rgba(0,0,0,.28);border:1px solid var(--glass-border);color:var(--text);border-radius:10px;padding:.5rem .8rem;outline:none">
+          <option value="">{{ t('vis.filterAll') }}</option>
+          <option value="public">{{ t('vis.public') }}</option>
+          <option value="private">{{ t('vis.private') }}</option>
         </select>
       </div>
       <div class="glass-card" style="padding:.6rem 1rem;overflow-x:auto">
@@ -463,6 +488,7 @@ onMounted(async () => {
           <div class="field"><label>{{ t('set.description') }}</label><input v-model="settings.description" /></div>
           <label class="switch"><input type="checkbox" v-model="settings.notice_status" :true-value="1" :false-value="0" /><span class="knob" /><span class="sw-label">{{ t('set.noticeOn') }}</span></label>
           <div class="field" v-if="settings.notice_status"><textarea v-model="settings.notice" :placeholder="t('set.noticeHtml')"></textarea></div>
+          <div class="field"><label>{{ t('set.terms') }}</label><textarea v-model="settings.terms" rows="4"></textarea><span class="hint">{{ t('set.termsHint') }}</span></div>
         </div>
 
         <div class="set-section">
@@ -501,6 +527,7 @@ onMounted(async () => {
             {{ t('set.allowOtherWarn') }}
           </p>
           <div class="field"><label>{{ t('set.extensions') }}</label><input v-model="settings.extensions" /><span class="hint">{{ t('set.extensionsHint') }}</span></div>
+          <div class="field" v-if="settings.allow_images"><label>{{ t('set.imageExtensions') }}</label><input v-model="settings.image_extensions" /></div>
         </div>
 
         <div class="set-section">
@@ -518,6 +545,11 @@ onMounted(async () => {
             <div class="field"><label>{{ t('set.maxHeight') }}</label><input v-model.number="settings.max_height" type="number" min="0" /></div>
             <div class="field"><label>{{ t('set.minWidth') }}</label><input v-model.number="settings.min_width" type="number" min="0" /></div>
             <div class="field"><label>{{ t('set.minHeight') }}</label><input v-model.number="settings.min_height" type="number" min="0" /></div>
+            <div class="field" v-if="settings.thumbnail"><label>{{ t('set.thumbWidth') }}</label><input v-model.number="settings.thumbnail_w" type="number" min="16" max="4096" /></div>
+          </div>
+          <div class="row" style="gap:1.4rem;margin-bottom:.9rem" v-if="settings.allow_images">
+            <label class="switch"><input type="checkbox" v-model="settings.image_compress" :true-value="1" :false-value="0" /><span class="knob" /><span class="sw-label">{{ t('set.imageCompress') }}</span></label>
+            <div class="field" v-if="settings.image_compress" style="width:200px"><label>{{ t('set.imageQuality') }}</label><input v-model.number="settings.image_quality" type="number" min="10" max="100" /></div>
           </div>
           <div class="row" style="gap:1.4rem">
             <label class="switch"><input type="checkbox" v-model="settings.resize_enabled" :true-value="1" :false-value="0" /><span class="knob" /><span class="sw-label">{{ t('set.forceSize') }}</span></label>
@@ -535,12 +567,19 @@ onMounted(async () => {
               <select v-model.number="settings.watermark"><option :value="0">{{ t('set.wmOff') }}</option><option :value="1">{{ t('set.wmText') }}</option><option :value="2">{{ t('set.wmImage') }}</option></select></div>
             <div class="field" v-if="settings.watermark === 1" style="flex:1"><label>{{ t('set.wmContent') }}</label><input v-model="settings.water_text" /></div>
             <div class="field" v-if="settings.watermark === 1" style="width:140px"><label>{{ t('set.wmSize') }}</label><input v-model.number="settings.water_size" type="number" min="8" max="80" /></div>
+            <div class="field" v-if="settings.watermark === 1" style="width:170px"><label>{{ t('set.wmColor') }}</label><input v-model="settings.water_color" placeholder="white@0.6" /></div>
             <div class="field" v-if="settings.watermark" style="width:140px"><label>{{ t('set.wmPos') }}</label><input v-model.number="settings.water_position" type="number" min="1" max="9" /></div>
           </div>
           <div class="row" v-if="settings.watermark === 2" style="gap:1.4rem">
             <div class="field" style="width:200px"><label>{{ t('set.wmOpacity') }}</label>
               <input v-model.number="settings.water_opacity" type="number" min="0" max="1" step="0.05" /></div>
           </div>
+          <div class="field" v-if="settings.watermark === 2">
+            <label>{{ t('set.wmImg') }}</label>
+            <input v-model="settings.water_img" placeholder="watermark.png" />
+            <span class="hint">{{ t('set.wmImgHint') }}</span>
+          </div>
+          <p class="hint" v-if="settings.watermark === 1">{{ t('set.wmColorHint') }}</p>
           <p class="hint" v-if="settings.watermark === 2">{{ t('set.wmImageHint') }}</p>
         </div>
 
@@ -609,6 +648,7 @@ onMounted(async () => {
 
         <div class="row" style="position:sticky;bottom:12px;background:var(--glass-bg-strong);padding:.8rem;border-radius:12px;border:1px solid var(--glass-border)">
           <button class="btn" :disabled="saving" @click="saveSettings">{{ saving ? t('ad.saving') : t('ad.saveAll') }}</button>
+          <span v-if="dirty" class="pill banned">● {{ t('ad.unsaved') }}</span>
           <span class="muted2">{{ t('ad.savedHint') }}</span>
         </div>
       </div>

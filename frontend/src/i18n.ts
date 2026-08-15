@@ -46,6 +46,10 @@ const D: Dict = {
   'nav.logout': ['退出', 'Sign out'],
   'foot.tagline': ['自托管商业视频床 · Vue 3 + Node · 单容器部署',
                    'Self-hosted video hosting · Vue 3 + Node · single container'],
+  'terms.title': ['服务条款', 'Terms of service'],
+  'terms.empty': ['站长尚未填写服务条款。', 'The site owner has not written any terms yet.'],
+  'terms.link': ['服务条款', 'Terms'],
+  'nf.body': ['这个页面不存在。', 'This page does not exist.'],
 
   // ---- common ----
   'c.copy': ['复制', 'Copy'],
@@ -290,6 +294,7 @@ const D: Dict = {
   'ad.saveFailed': ['保存失败', 'Could not save'],
   'ad.savedHint': ['保存后立即生效，无需重启', 'Applies immediately — no restart needed'],
   'ad.unsaved': ['有未保存的更改', 'You have unsaved changes'],
+  'ad.leaveConfirm': ['设置有未保存的更改，确定离开并丢弃吗？', 'You have unsaved settings. Leave and discard them?'],
 
   // settings sections
   'set.site': ['🌐 站点', '🌐 Site'],
@@ -324,6 +329,19 @@ const D: Dict = {
   'set.perUserDay': ['每用户每日上限（0 不限）', 'Per-user daily cap (0 = unlimited)'],
   'set.storageQuota': ['站点总存储上限 GB（0 不限）', 'Total storage cap in GB (0 = unlimited)'],
   'set.extensions': ['视频格式白名单', 'Allowed video extensions'],
+  'set.imageExtensions': ['图片格式白名单', 'Allowed image extensions'],
+  'set.thumbWidth': ['缩略图宽度 (px)', 'Thumbnail width (px)'],
+  'set.imageCompress': ['压缩图片', 'Compress images'],
+  'set.imageQuality': ['图片质量 (10-100)', 'Image quality (10-100)'],
+  'set.wmColor': ['文字颜色', 'Text colour'],
+  'set.wmColorHint': ['ffmpeg 颜色写法，如 white@0.6、#ff0000、black@0.35',
+                      'An ffmpeg colour, e.g. white@0.6, #ff0000, black@0.35'],
+  'set.wmImg': ['水印图片文件名', 'Watermark image filename'],
+  'set.wmImgHint': ['取自数据目录，只用文件名（会忽略路径）。留空 = watermark.png',
+                    'Read from the data directory; filename only, any path is ignored. Blank = watermark.png'],
+  'set.terms': ['服务条款（留空则不显示入口）', 'Terms of service (blank hides the link)'],
+  'set.termsHint': ['支持 HTML，显示在 /terms，页脚会出现入口',
+                    'HTML allowed. Served at /terms with a link in the footer'],
   'set.extensionsHint': ['逗号分隔；浏览器可播：mp4/webm，其余将依赖转码为 mp4',
                          'Comma separated. Browsers play mp4/webm natively; the rest rely on transcoding.'],
   'set.transcode': ['🎞️ 转码与画质', '🎞️ Transcoding & quality'],

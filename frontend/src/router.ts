@@ -5,6 +5,8 @@ import Stats from './pages/Stats.vue'
 import Login from './pages/Login.vue'
 import My from './pages/My.vue'
 import Admin from './pages/Admin.vue'
+import Terms from './pages/Terms.vue'
+import NotFound from './pages/NotFound.vue'
 
 export const router = createRouter({
   history: createWebHistory(import.meta.env.BASE_URL),
@@ -15,6 +17,9 @@ export const router = createRouter({
     { path: '/login', name: 'login', component: Login },
     { path: '/my', name: 'my', component: My },
     { path: '/admin', name: 'admin', component: Admin },
+    { path: '/terms', name: 'terms', component: Terms },
+    // catch-all: an unknown path used to render the chrome with a blank body
+    { path: '/:pathMatch(.*)*', name: 'notfound', component: NotFound },
   ],
   scrollBehavior: () => ({ top: 0 }),
 })

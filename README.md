@@ -155,7 +155,7 @@ DATA_DIR=/tmp/vh-test PORT=8098 ADMIN_PASSWORD=TestPass123 node server/server.js
 BASE=http://localhost:8098 ADMIN_PASSWORD=TestPass123 bash test/smoke.sh
 ```
 
-`test/smoke.sh` — 108 assertions, no ffmpeg required. Covers registration and the
+`test/smoke.sh` — 112 assertions, no ffmpeg required. Covers registration and the
 CAPTCHA, visibility and gallery filtering, share-link formats, the bilingual API,
 uploads that must not be executable, the last administrator that must not be
 lockable, public endpoints that must not leak IPs, settings clamping, quarantined

@@ -13,7 +13,6 @@ export const DEFAULTS = {
   notice: '',
   tips: '单文件 ≤ 500MB，支持常见视频格式',
   domain: '',                       // public origin used in copied links; empty = request origin
-  theme: 'dark',
   custom_head: '',                  // 自定义代码 (<head> injection, player + portal)
   footer_code: '',                  // 统计脚本等, injected before </body>
   terms: '',
@@ -181,7 +180,7 @@ export function confNum(key) {
 
 /** Keys safe to expose to anonymous visitors. */
 export const PUBLIC_KEYS = [
-  'title', 'keywords', 'description', 'notice', 'notice_status', 'tips', 'theme',
+  'title', 'keywords', 'description', 'notice', 'notice_status', 'tips',
   'custom_head', 'footer_code', 'terms', 'must_login', 'allow_guest', 'max_size_mb',
   'max_upload_files', 'extensions', 'allow_images', 'image_extensions', 'allow_other',
   'explore_public', 'stats_public', 'ad_top', 'ad_top_info', 'ad_bot', 'ad_bot_info',
