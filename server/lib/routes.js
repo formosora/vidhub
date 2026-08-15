@@ -16,7 +16,7 @@ import { acceptUpload, findFile, thumbPath } from './upload.js'
 import { hasFfmpeg } from './media.js'
 import { send, readJson, clientIp, today, newToken, nowIso } from './util.js'
 import { t, lang, AppError } from './i18n.js'
-import { unlinkSync } from 'node:fs'
+import { unlinkSync, statSync } from 'node:fs'
 
 const tokenOf = req => (req.headers.authorization || '').replace(/^Bearer\s+/i, '')
 const page = (url, def = 20, max = 100) => {
@@ -241,16 +241,40 @@ export async function handleApi(req, res, path, url) {
     }
   }
 
-  // recycle bin list
+  /**
+   * Recycle bin. Scoped to the caller by default and widened only with an
+   * explicit `all=1` from an admin — the same contract as /api/videos. It used
+   * to hand admins the whole site unasked, which the "My files" page then
+   * displayed under a heading promising the opposite.
+   */
   if (path === '/api/recycle' && req.method === 'GET') {
     if (!user) return fail(401, 'auth.unauthorized')
     const { size, off } = page(url)
+    const showAll = isAdmin(user) && url.searchParams.get('all') === '1'
     const conds = ["status = 'recycled'"], args = []
-    if (!isAdmin(user)) { conds.push('user_id = ?'); args.push(user.id) }
+    if (!showAll) { conds.push('user_id = ?'); args.push(user.id) }
     const where = conds.join(' AND ')
     const total = q.get(`SELECT COUNT(*) c FROM videos WHERE ${where}`, ...args).c
     const rows = q.all(`SELECT * FROM videos WHERE ${where} ORDER BY uploaded DESC LIMIT ? OFFSET ?`, ...args, size, off)
-    return send(res, 200, { total, items: rows.map(videoOut) })
+    return send(res, 200, { total, scope: showAll ? 'site' : 'own', items: rows.map(videoOut) })
+  }
+
+  /** Purge the bin — own by default, whole site for an admin passing all=1. */
+  if (path === '/api/recycle' && req.method === 'DELETE') {
+    if (!user) return fail(401, 'auth.unauthorized')
+    const showAll = isAdmin(user) && url.searchParams.get('all') === '1'
+    const rows = showAll
+      ? q.all("SELECT name, stored FROM videos WHERE status = 'recycled'")
+      : q.all("SELECT name, stored FROM videos WHERE status = 'recycled' AND user_id = ?", user.id)
+    let purged = 0, freed = 0
+    for (const v of rows) {
+      const f = findFile(v)
+      if (f) { try { freed += statSync(f).size } catch {} try { unlinkSync(f) } catch {} }
+      try { unlinkSync(thumbPath(v.name)) } catch {}
+      q.run('DELETE FROM videos WHERE name=?', v.name)
+      purged++
+    }
+    return send(res, 200, { ok: true, purged, freed })
   }
 
   // ---------- API keys ----------

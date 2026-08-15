@@ -66,26 +66,48 @@ docker run -d --name vidhub -p 8081:8080 \
 
 ## 🔌 API
 
-| Endpoint | 权限 | 说明 |
-| --- | --- | --- |
-| `GET /api/health` | 公开 | 存活探针（Docker HEALTHCHECK 使用） |
-| `POST /api/login` | 公开 | 登录（限速） |
-| `GET /api/captcha` | 公开 | 取人机验证题 → `{id, svg, ttl}`（限速，一次性） |
-| `POST /api/register` | 公开\* | 自助注册（\*需后台开启；限速 + 验证码） |
-| `POST /api/videos?name=…` | 用户/游客\* | 上传（binary body，\*游客需后台开启） |
-| `GET /api/videos?page=&q=` | 用户 | 我的视频（admin 加 `all=1` 看全站） |
-| `DELETE /api/videos/<name>` | 所有者 | 移入回收站 |
-| `POST /api/videos/<name>/restore` · `DELETE …/force` | 所有者 | 恢复 / 彻底删除 |
-| `PATCH /api/videos/<name>` | 所有者 | 改可见性 `{visibility:"public"\|"private"}` |
-| `POST /api/videos/<name>/ban` · `/unban` | 管理员 | 隔离 / 解除 |
-| `GET/PATCH /api/me` | 用户 | 读取 / 修改个人偏好（默认可见性） |
-| `GET/PUT /api/admin/settings` | 管理员 | 全部站点设置 |
-| `GET/POST/PATCH/DELETE /api/admin/users…` | 管理员 | 用户管理 |
-| `GET /api/admin/logs` · `…/iprules` · `…/hashblack` | 管理员 | 日志 / IP 名单 / 哈希黑名单 |
-| `GET /api/public/videos` | 公开\* | 广场（\*可关闭；不含上传者 IP/用户名） |
-| `GET /api/stats` | 按身份 | 管理员看全站，上传员看自己，匿名需开启 `stats_public` |
-| `GET /v/<name>` | 公开 | 视频流（Range/206） |
-| `GET /t/<name>` · `/p/<name>` · `/d/<name>` | 公开 | 缩略图 / 播放页 / 下载 |
+**公开**
+
+| Endpoint | 说明 |
+| --- | --- |
+| `GET /api/health` | 存活探针（Docker HEALTHCHECK 使用） |
+| `GET /api/config/public` | 可对外暴露的站点设置（标题、限额、开关） |
+| `POST /api/login` · `POST /api/logout` | 登录（限速）/ 登出 |
+| `GET /api/captcha` | 取人机验证题 → `{id, svg, ttl}`（限速，一次性） |
+| `POST /api/register` | 自助注册 —— 需后台开启；限速 + 验证码 |
+| `GET /api/public/videos` | 广场。可关闭；不含上传者 IP/用户名 |
+| `GET /v/<name>` · `/t/<name>` · `/p/<name>` · `/d/<name>` | 视频流（Range/206）/ 缩略图 / 播放页 / 下载 |
+
+**登录后**
+
+| Endpoint | 说明 |
+| --- | --- |
+| `POST /api/videos?name=…&visibility=…` | 上传（binary body）。后台开启后游客也可用 |
+| `GET /api/videos?page=&q=&status=&visibility=` | 我的视频；管理员加 `all=1` 看全站 |
+| `GET /api/videos/<name>` | 单个详情（所有者或管理员） |
+| `PATCH /api/videos/<name>` | 改可见性 `{visibility:"public"\|"private"}` |
+| `DELETE /api/videos/<name>` | 移入回收站 |
+| `POST /api/videos/<name>/restore` · `DELETE …/force` | 恢复 / 彻底删除 |
+| `GET /api/recycle` | 回收站；管理员加 `all=1` 看全站 |
+| `DELETE /api/recycle` | 清空回收站 —— 自己的，管理员加 `all=1` 清全站 |
+| `GET/PATCH /api/me` | 读取 / 修改个人偏好（默认可见性） |
+| `POST /api/me/password` | 修改自己的密码（会踢掉全部会话） |
+| `GET/POST /api/me/keys` · `DELETE /api/me/keys/<key>` | API Key 管理 |
+| `GET /api/stats` | 管理员看全站，上传员看自己，匿名需开启 `stats_public` |
+
+**管理员**
+
+| Endpoint | 说明 |
+| --- | --- |
+| `POST /api/videos/<name>/ban` · `/unban` | 隔离 / 解除 |
+| `GET/PUT /api/admin/settings` | 全部站点设置 |
+| `GET /api/admin/check` | 环境探测 → `{ok, ffmpeg}` |
+| `GET /api/admin/stats` | 全站数据，另含用户数、隔离数、回收站、今日 IP 排行 |
+| `GET /api/admin/jobs` | 最近 50 条管线任务 |
+| `GET/POST /api/admin/users` · `PATCH/DELETE /api/admin/users/<id>` | 用户管理 |
+| `GET /api/admin/logs?ip=` | 上传日志（含 IP 归属地） |
+| `GET/POST /api/admin/iprules` · `DELETE …/<id>` | IP 黑白名单 |
+| `GET/POST /api/admin/hashblack` · `DELETE …/<sha256>` | 文件哈希黑名单 |
 
 ## 📁 结构
 
@@ -123,7 +145,7 @@ DATA_DIR=/tmp/vh-test PORT=8098 ADMIN_PASSWORD=TestPass123 node server/server.js
 BASE=http://localhost:8098 ADMIN_PASSWORD=TestPass123 bash test/smoke.sh
 ```
 
-`test/smoke.sh`（95 条断言，不需要 ffmpeg）——注册开关与验证码、可见性与广场过滤、
+`test/smoke.sh`（108 条断言，不需要 ffmpeg）——注册开关与验证码、可见性与广场过滤、
 分享链接格式、双语 API、上传内容不可执行、最后一个管理员不可锁死、公开接口不泄露
 IP、设置项越界钳制、隔离内容不可重传、配额与防盗链、越权边界、Range/路径穿越。
 

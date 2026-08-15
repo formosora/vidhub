@@ -102,6 +102,27 @@ ck "quota msg zh" "该 IP 超过每日上传上限" "$(curl -s -X PUT $B/api/adm
 ck "quota msg en" "daily upload limit" "$(curl -s -H 'Accept-Language: en-US' -X POST "$B/api/videos?name=qz.mp4" "${A[@]}" --data-binary @qz.mp4)"
 curl -s -X PUT $B/api/admin/settings "${A[@]}" -H 'Content-Type: application/json' -d '{"daily_limit_ip":0}' -o/dev/null
 
+echo "== recycle bin scoping =="
+head -c 21000 /dev/urandom > bin1.mp4
+head -c 22000 /dev/urandom > bin2.mp4
+NB1=$(curl -s -X POST "$B/api/videos?name=bin1.mp4" "${NT[@]}" --data-binary @bin1.mp4 | sed 's/.*"name":"\([^"]*\)".*/\1/')
+NB2=$(curl -s -X POST "$B/api/videos?name=bin2.mp4" "${A[@]}" --data-binary @bin2.mp4 | sed 's/.*"name":"\([^"]*\)".*/\1/')
+curl -s -X DELETE "$B/api/videos/$NB1" "${NT[@]}" -o/dev/null
+curl -s -X DELETE "$B/api/videos/$NB2" "${A[@]}" -o/dev/null
+ck "admin bin is own by default" '"scope":"own"' "$(curl -s "$B/api/recycle" "${A[@]}")"
+ck "admin bin excludes others"   "" "$(curl -s "$B/api/recycle" "${A[@]}" | grep -o 'bin1.mp4')"
+ck "all=1 widens for admin"      '"scope":"site"' "$(curl -s "$B/api/recycle?all=1" "${A[@]}")"
+ck "all=1 shows other users"     "bin1.mp4" "$(curl -s "$B/api/recycle?all=1" "${A[@]}")"
+ck "uploader sees only own"      "bin1.mp4" "$(curl -s "$B/api/recycle" "${NT[@]}")"
+ck "uploader all=1 no escalation" "" "$(curl -s "$B/api/recycle?all=1" "${NT[@]}" | grep -o 'bin2.mp4')"
+ck "purge needs auth"            "401" "$(curl -s -o/dev/null -w '%{http_code}' -X DELETE $B/api/recycle)"
+ck "uploader purge is scoped"    '"purged":1' "$(curl -s -X DELETE "$B/api/recycle" "${NT[@]}")"
+ck "admin item survived"         "bin2.mp4" "$(curl -s "$B/api/recycle?all=1" "${A[@]}")"
+ck "uploader cannot purge site"  '"purged":0' "$(curl -s -X DELETE "$B/api/recycle?all=1" "${NT[@]}")"
+ck "admin purge reports freed"   '"freed":22000' "$(curl -s -X DELETE "$B/api/recycle?all=1" "${A[@]}")"
+ck "bin now empty"               '"total":0' "$(curl -s "$B/api/recycle?all=1" "${A[@]}")"
+ck "purged row is gone"          "404" "$(curl -s -o/dev/null -w '%{http_code}' "$B/v/$NB2")"
+
 echo "== statistics scoping =="
 curl -s -X PUT $B/api/admin/settings "${A[@]}" -H 'Content-Type: application/json' -d '{"stats_public":0}' -o/dev/null
 ck "anonymous refused"       "403" "$(curl -s -o/dev/null -w '%{http_code}' $B/api/stats)"

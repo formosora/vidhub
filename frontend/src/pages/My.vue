@@ -55,6 +55,18 @@ const copy = async (text: string) => { await navigator.clipboard.writeText(text)
 const openShare = ref('')
 const toggleShare = (name: string) => { openShare.value = openShare.value === name ? '' : name }
 
+const purging = ref(false)
+async function emptyBin() {
+  if (!total.value || !confirm(t('bin.confirmOwn', total.value))) return
+  purging.value = true
+  const res = await api('/api/recycle', { method: 'DELETE' })
+  purging.value = false
+  if (!res.ok) return toast(t('c.failed'), false)
+  const j = await res.json()
+  toast(t('bin.purged', j.purged, fmtSize(j.freed)))
+  load()
+}
+
 async function toggleVisibility(v: VideoItem) {
   const next: Visibility = v.visibility === 'public' ? 'private' : 'public'
   const res = await api(`/api/videos/${v.name}`, {
@@ -127,8 +139,15 @@ onMounted(async () => {
       <div class="row" style="margin-bottom:.9rem" v-if="tab === 'videos'">
         <input v-model="q" :placeholder="t('my.searchMine')" style="background:rgba(0,0,0,.28);border:1px solid var(--glass-border);color:var(--text);border-radius:10px;padding:.5rem .8rem;outline:none" />
       </div>
+      <div class="row" style="margin-bottom:.9rem" v-else>
+        <span class="muted2" style="font-size:.78rem">{{ t('bin.note') }}</span>
+        <span class="grow"></span>
+        <button class="btn danger sm" :disabled="purging || !videos.length" @click="emptyBin">{{ t('bin.empty') }}</button>
+      </div>
       <div class="glass-card" style="padding:.4rem 1.2rem">
-        <div v-if="videos.length === 0" class="muted" style="text-align:center;padding:2rem 0">{{ t('c.empty') }}</div>
+        <div v-if="videos.length === 0" class="muted" style="text-align:center;padding:2rem 0">
+          {{ tab === 'recycle' ? t('bin.emptyState') : t('c.empty') }}
+        </div>
         <template v-for="v in videos" :key="v.name">
         <div class="vrow">
           <div class="thumb">

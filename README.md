@@ -74,26 +74,48 @@ Or `docker compose up -d`.
 
 ## 🔌 API
 
-| Endpoint | Access | Purpose |
-| --- | --- | --- |
-| `GET /api/health` | public | Liveness probe (used by the Docker healthcheck) |
-| `POST /api/login` | public | Sign in (rate limited) |
-| `GET /api/captcha` | public | Fetch a challenge → `{id, svg, ttl}` (rate limited, single use) |
-| `POST /api/register` | public\* | Self-registration (\*must be enabled in admin; rate limited + CAPTCHA) |
-| `POST /api/videos?name=…` | user/guest\* | Upload (binary body; \*guest uploads must be enabled) |
-| `GET /api/videos?page=&q=` | user | Own videos (admins add `all=1` for the whole site) |
-| `DELETE /api/videos/<name>` | owner | Move to the recycle bin |
-| `POST /api/videos/<name>/restore` · `DELETE …/force` | owner | Restore / delete permanently |
-| `PATCH /api/videos/<name>` | owner | Change visibility, `{visibility:"public"\|"private"}` |
-| `POST /api/videos/<name>/ban` · `/unban` | admin | Quarantine / release |
-| `GET/PATCH /api/me` | user | Read or update personal preferences (default visibility) |
-| `GET/PUT /api/admin/settings` | admin | All site settings |
-| `GET/POST/PATCH/DELETE /api/admin/users…` | admin | User management |
-| `GET /api/admin/logs` · `…/iprules` · `…/hashblack` | admin | Logs / IP rules / hash blocklist |
-| `GET /api/public/videos` | public\* | Gallery (\*can be closed; never includes uploader IP or username) |
-| `GET /api/stats` | scoped | Site-wide for admins, own figures for uploaders, nothing for anonymous unless `stats_public` |
-| `GET /v/<name>` | public | Media stream (Range/206) |
-| `GET /t/<name>` · `/p/<name>` · `/d/<name>` | public | Thumbnail / player page / download |
+**Public**
+
+| Endpoint | Purpose |
+| --- | --- |
+| `GET /api/health` | Liveness probe (used by the Docker healthcheck) |
+| `GET /api/config/public` | Site settings safe to expose (title, limits, toggles) |
+| `POST /api/login` · `POST /api/logout` | Sign in (rate limited) / sign out |
+| `GET /api/captcha` | Fetch a challenge → `{id, svg, ttl}` (rate limited, single use) |
+| `POST /api/register` | Self-registration — must be enabled in admin; rate limited + CAPTCHA |
+| `GET /api/public/videos` | Gallery. Can be closed; never includes uploader IP or username |
+| `GET /v/<name>` · `/t/<name>` · `/p/<name>` · `/d/<name>` | Stream (Range/206) / thumbnail / player page / download |
+
+**Signed in**
+
+| Endpoint | Purpose |
+| --- | --- |
+| `POST /api/videos?name=…&visibility=…` | Upload (binary body). Guests too, if guest uploads are enabled |
+| `GET /api/videos?page=&q=&status=&visibility=` | Own videos; admins add `all=1` for the whole site |
+| `GET /api/videos/<name>` | One item (owner or admin) |
+| `PATCH /api/videos/<name>` | Change visibility, `{visibility:"public"\|"private"}` |
+| `DELETE /api/videos/<name>` | Move to the recycle bin |
+| `POST /api/videos/<name>/restore` · `DELETE …/force` | Restore / delete permanently |
+| `GET /api/recycle` | Recycle bin; admins add `all=1` for the whole site |
+| `DELETE /api/recycle` | Purge the bin — own, or site-wide for an admin with `all=1` |
+| `GET/PATCH /api/me` | Read or update personal preferences (default visibility) |
+| `POST /api/me/password` | Change own password (invalidates every session) |
+| `GET/POST /api/me/keys` · `DELETE /api/me/keys/<key>` | API key management |
+| `GET /api/stats` | Site-wide for admins, own figures for uploaders, anonymous only if `stats_public` |
+
+**Admin**
+
+| Endpoint | Purpose |
+| --- | --- |
+| `POST /api/videos/<name>/ban` · `/unban` | Quarantine / release |
+| `GET/PUT /api/admin/settings` | All site settings |
+| `GET /api/admin/check` | Environment probe → `{ok, ffmpeg}` |
+| `GET /api/admin/stats` | Site figures plus users, quarantined, bin size, top IPs |
+| `GET /api/admin/jobs` | The 50 most recent pipeline jobs |
+| `GET/POST /api/admin/users` · `PATCH/DELETE /api/admin/users/<id>` | User management |
+| `GET /api/admin/logs?ip=` | Upload log with IP geolocation |
+| `GET/POST /api/admin/iprules` · `DELETE …/<id>` | IP allow/block rules |
+| `GET/POST /api/admin/hashblack` · `DELETE …/<sha256>` | File-hash blocklist |
 
 ## 📁 Layout
 
@@ -133,7 +155,7 @@ DATA_DIR=/tmp/vh-test PORT=8098 ADMIN_PASSWORD=TestPass123 node server/server.js
 BASE=http://localhost:8098 ADMIN_PASSWORD=TestPass123 bash test/smoke.sh
 ```
 
-`test/smoke.sh` — 95 assertions, no ffmpeg required. Covers registration and the
+`test/smoke.sh` — 108 assertions, no ffmpeg required. Covers registration and the
 CAPTCHA, visibility and gallery filtering, share-link formats, the bilingual API,
 uploads that must not be executable, the last administrator that must not be
 lockable, public endpoints that must not leak IPs, settings clamping, quarantined

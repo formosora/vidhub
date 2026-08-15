@@ -8,7 +8,7 @@ import ShareBox from '../components/ShareBox.vue'
 import { toast } from '../toast'
 
 const router = useRouter()
-const tab = ref<'dash' | 'videos' | 'users' | 'security' | 'settings'>('dash')
+const tab = ref<'dash' | 'videos' | 'recycle' | 'users' | 'security' | 'settings'>('dash')
 
 // ================= dashboard =================
 interface AdminStats {
@@ -65,6 +65,40 @@ const copy = async (text: string) => { await navigator.clipboard.writeText(text)
 
 const openShare = ref('')
 const toggleShare = (name: string) => { openShare.value = openShare.value === name ? '' : name }
+
+// ================= recycle bin (site-wide) =================
+const binItems = ref<VideoItem[]>([])
+const binTotal = ref(0)
+const binPage = ref(1)
+const binSize = 15
+const purging = ref(false)
+
+async function loadBin() {
+  const res = await api(`/api/recycle?all=1&page=${binPage.value}&size=${binSize}`)
+  if (!res.ok) return
+  const j = await res.json()
+  binItems.value = j.items || []
+  binTotal.value = j.total || 0
+}
+watch(binPage, () => { if (tab.value === 'recycle') loadBin() })
+
+async function binAction(v: VideoItem, action: 'restore' | 'force') {
+  if (action === 'force' && !confirm(t('my.confirmForce', v.orig || v.name))) return
+  const res = await api(`/api/videos/${v.name}${action === 'force' ? '/force' : '/restore'}`,
+    { method: action === 'force' ? 'DELETE' : 'POST' })
+  if (res.ok) { toast(t('c.ok')); loadBin() } else toast(t('c.failed'), false)
+}
+
+async function emptyBinAll() {
+  if (!binTotal.value || !confirm(t('bin.confirmAll', binTotal.value))) return
+  purging.value = true
+  const res = await api('/api/recycle?all=1', { method: 'DELETE' })
+  purging.value = false
+  if (!res.ok) return toast(t('c.failed'), false)
+  const j = await res.json()
+  toast(t('bin.purged', j.purged, fmtSize(j.freed)))
+  loadBin(); loadDash()
+}
 
 // ================= users =================
 interface User { id: number; username: string; role: string; status: string; daily_limit: number; created: string; videos: number; used: number }
@@ -144,6 +178,7 @@ async function saveSettings() {
 function reload(which = tab.value) {
   if (which === 'dash') loadDash()
   if (which === 'videos') loadVideos()
+  if (which === 'recycle') loadBin()
   if (which === 'users') loadUsers()
   if (which === 'security') loadSecurity()
   if (which === 'settings') loadSettings()
@@ -170,6 +205,7 @@ onMounted(async () => {
     <div class="tabs">
       <button class="tab" :class="{ on: tab === 'dash' }" @click="tab = 'dash'">{{ t('ad.tabDash') }}</button>
       <button class="tab" :class="{ on: tab === 'videos' }" @click="tab = 'videos'">{{ t('ad.tabVideos') }}</button>
+      <button class="tab" :class="{ on: tab === 'recycle' }" @click="tab = 'recycle'">{{ t('my.tabRecycle') }}</button>
       <button class="tab" :class="{ on: tab === 'users' }" @click="tab = 'users'">{{ t('ad.tabUsers') }}</button>
       <button class="tab" :class="{ on: tab === 'security' }" @click="tab = 'security'">{{ t('ad.tabSecurity') }}</button>
       <button class="tab" :class="{ on: tab === 'settings' }" @click="tab = 'settings'">{{ t('ad.tabSettings') }}</button>
@@ -270,6 +306,46 @@ onMounted(async () => {
         <button class="btn ghost sm" :disabled="vPage <= 1" @click="vPage--">{{ t('c.prev') }}</button>
         <span>{{ vPage }} / {{ Math.ceil(vTotal / vSize) }}</span>
         <button class="btn ghost sm" :disabled="vPage >= Math.ceil(vTotal / vSize)" @click="vPage++">{{ t('c.next') }}</button>
+      </div>
+    </template>
+
+    <!-- ============ 回收站（全站） ============ -->
+    <template v-if="tab === 'recycle'">
+      <div class="row" style="margin-bottom:.9rem">
+        <span class="pill role-admin">{{ t('st.scopeSite') }}</span>
+        <span class="muted2" style="font-size:.78rem">{{ t('bin.note') }}</span>
+        <span class="grow"></span>
+        <button class="btn danger sm" :disabled="purging || !binTotal" @click="emptyBinAll">{{ t('bin.empty') }}</button>
+      </div>
+      <div class="glass-card" style="padding:.6rem 1rem;overflow-x:auto">
+        <table class="tbl">
+          <thead><tr>
+            <th>{{ t('ad.preview') }}</th><th>{{ t('ad.name') }}</th>
+            <th class="hide-m">{{ t('ad.size') }}</th><th class="hide-m">{{ t('ad.uploader') }}</th>
+            <th>{{ t('ad.actions') }}</th>
+          </tr></thead>
+          <tbody>
+            <tr v-for="v in binItems" :key="v.name">
+              <td><img class="thumb-mini" :src="v.thumb" @error="($event.target as HTMLImageElement).style.visibility = 'hidden'" /></td>
+              <td style="max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">
+                {{ v.orig || v.name }}
+                <div class="muted2">{{ v.uploaded.slice(0, 10) }}</div>
+              </td>
+              <td class="hide-m">{{ fmtSize(v.size) }}</td>
+              <td class="hide-m">{{ v.username }}</td>
+              <td style="white-space:nowrap">
+                <button class="btn ghost sm" @click="binAction(v, 'restore')">{{ t('c.restore') }}</button>
+                <button class="btn danger sm" @click="binAction(v, 'force')">{{ t('my.forceDelete') }}</button>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+        <p v-if="!binItems.length" class="muted" style="text-align:center;padding:1.4rem 0">{{ t('bin.emptyState') }}</p>
+      </div>
+      <div v-if="Math.ceil(binTotal / binSize) > 1" class="pager">
+        <button class="btn ghost sm" :disabled="binPage <= 1" @click="binPage--">{{ t('c.prev') }}</button>
+        <span>{{ binPage }} / {{ Math.ceil(binTotal / binSize) }}</span>
+        <button class="btn ghost sm" :disabled="binPage >= Math.ceil(binTotal / binSize)" @click="binPage++">{{ t('c.next') }}</button>
       </div>
     </template>
 
