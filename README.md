@@ -120,6 +120,8 @@ Or `docker compose up -d`.
 | `GET /api/admin/logs?ip=` | Upload log with IP geolocation |
 | `GET/POST /api/admin/iprules` · `DELETE …/<id>` | IP allow/block rules |
 | `GET/POST /api/admin/hashblack` · `DELETE …/<sha256>` | File-hash blocklist |
+| `GET/POST /api/admin/webhooks` · `PATCH/DELETE …/<id>` | Webhook endpoints |
+| `POST /api/admin/webhooks/<id>/test` · `GET …/webhooks/log` | Send a test ping / delivery log |
 
 ## 📁 Layout
 
@@ -159,7 +161,7 @@ DATA_DIR=/tmp/vh-test PORT=8098 ADMIN_PASSWORD=TestPass123 node server/server.js
 BASE=http://localhost:8098 ADMIN_PASSWORD=TestPass123 bash test/smoke.sh
 ```
 
-`test/smoke.sh` — 144 assertions, no ffmpeg required. Covers registration and the
+`test/smoke.sh` — 161 assertions, no ffmpeg required. Covers registration and the
 CAPTCHA, visibility and gallery filtering, share-link formats, the bilingual API,
 uploads that must not be executable, the last administrator that must not be
 lockable, public endpoints that must not leak IPs, settings clamping, quarantined
@@ -305,3 +307,48 @@ The offset is authoritative on the server. A chunk that does not begin exactly
 at the current offset is refused with the real offset attached, so a confused
 client resynchronises instead of corrupting the file. Sessions nobody returns to
 are swept after 24 hours.
+
+## 🔔 Webhooks
+
+Configured under *Admin → Webhooks*. Events are queued and delivered out of
+band, so a slow or dead endpoint never holds up an upload.
+
+| Event | Fires when |
+| --- | --- |
+| `upload.completed` | A file finished processing and went live |
+| `upload.rejected` | An upload was refused — type, size, quota, hash blocklist, resolution |
+| `moderation.flagged` | Moderation quarantined or deleted something |
+| `video.deleted` | A file was permanently removed |
+| `user.registered` | Someone signed up |
+
+Every delivery carries:
+
+```
+X-Vidhub-Event: upload.completed
+X-Vidhub-Delivery: <uuid>
+X-Vidhub-Timestamp: 1735689600000
+X-Vidhub-Signature: sha256=<hex>
+```
+
+The signature is `HMAC-SHA256(secret, "<timestamp>.<raw body>")`. **Verify it
+before trusting the payload** — the URL alone is not a secret. Including the
+timestamp in the signed string is what stops a captured delivery from being
+replayed later.
+
+```js
+const want = 'sha256=' + createHmac('sha256', SECRET)
+  .update(`${req.headers['x-vidhub-timestamp']}.${rawBody}`).digest('hex')
+// compare with timingSafeEqual, not ===
+```
+
+Failures retry with exponential backoff (`webhook_retries`, default 3). Twenty
+consecutive failures disable the hook rather than hammering a dead endpoint
+forever; re-enabling clears the streak. Every attempt lands in the delivery log,
+so an integration that quietly stopped working is visible instead of being
+noticed weeks later.
+
+> Targets that resolve to loopback, link-local or RFC1918 addresses are refused
+> by default. The URL comes from an administrator, but a compromised admin
+> account should not also become a probe into your private network — including
+> `169.254.169.254`, the cloud metadata endpoint. Set `webhook_allow_private`
+> if your receiver genuinely is internal.

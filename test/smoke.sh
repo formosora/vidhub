@@ -102,6 +102,30 @@ ck "quota msg zh" "该 IP 超过每日上传上限" "$(curl -s -X PUT $B/api/adm
 ck "quota msg en" "daily upload limit" "$(curl -s -H 'Accept-Language: en-US' -X POST "$B/api/videos?name=qz.mp4" "${A[@]}" --data-binary @qz.mp4)"
 curl -s -X PUT $B/api/admin/settings "${A[@]}" -H 'Content-Type: application/json' -d '{"daily_limit_ip":0}' -o/dev/null
 
+echo "== webhooks =="
+ck "SSRF: loopback refused"  "hook.privateTarget" "$(curl -s -X POST $B/api/admin/webhooks "${A[@]}" -H 'Content-Type: application/json' -d '{"url":"http://127.0.0.1:9/x"}')"
+ck "SSRF: rfc1918 refused"   "hook.privateTarget" "$(curl -s -X POST $B/api/admin/webhooks "${A[@]}" -H 'Content-Type: application/json' -d '{"url":"http://10.0.0.1/x"}')"
+ck "SSRF: link-local refused" "hook.privateTarget" "$(curl -s -X POST $B/api/admin/webhooks "${A[@]}" -H 'Content-Type: application/json' -d '{"url":"http://169.254.169.254/latest/meta-data/"}')"
+ck "non-http refused"        "hook.badUrl" "$(curl -s -X POST $B/api/admin/webhooks "${A[@]}" -H 'Content-Type: application/json' -d '{"url":"ftp://example.com/x"}')"
+ck "garbage url refused"     "hook.badUrl" "$(curl -s -X POST $B/api/admin/webhooks "${A[@]}" -H 'Content-Type: application/json' -d '{"url":"not a url"}')"
+ck "unresolvable refused"    "hook.unresolvable" "$(curl -s -X POST $B/api/admin/webhooks "${A[@]}" -H 'Content-Type: application/json' -d '{"url":"https://nx-vidhub-test.invalid/x"}')"
+
+curl -s -X PUT $B/api/admin/settings "${A[@]}" -H 'Content-Type: application/json' -d '{"webhook_allow_private":1}' -o/dev/null
+HK=$(curl -s -X POST $B/api/admin/webhooks "${A[@]}" -H 'Content-Type: application/json' -d '{"url":"http://127.0.0.1:9/dead","events":"upload.completed"}')
+HKID=$(echo "$HK" | sed 's/.*"id":\([0-9]*\).*/\1/')
+ck "created once allowed"    '"url":"http://127.0.0.1:9/dead"' "$HK"
+ck "secret is generated"     '"secret":"whsec_' "$HK"
+ck "unknown event refused"   "hook.badEvents" "$(curl -s -X POST $B/api/admin/webhooks "${A[@]}" -H 'Content-Type: application/json' -d '{"url":"http://127.0.0.1:9/x","events":"not.a.real.event"}')"
+ck "events are listed"       '"upload.completed"' "$(curl -s $B/api/admin/webhooks "${A[@]}")"
+ck "test against a dead port fails" '"ok":false' "$(curl -s -X POST "$B/api/admin/webhooks/$HKID/test" "${A[@]}")"
+ck "failed delivery is logged" '"event":"ping"' "$(curl -s $B/api/admin/webhooks/log "${A[@]}")"
+ck "can be disabled"         '"status":"disabled"' "$(curl -s -X PATCH "$B/api/admin/webhooks/$HKID" "${A[@]}" -H 'Content-Type: application/json' -d '{"status":"disabled"}')"
+ck "missing hook is 404"     "hook.notFound" "$(curl -s -X PATCH "$B/api/admin/webhooks/99999" "${A[@]}" -H 'Content-Type: application/json' -d '{"status":"active"}')"
+ck "uploader cannot manage"  "403" "$(curl -s -o/dev/null -w '%{http_code}' $B/api/admin/webhooks "${NT[@]}")"
+ck "deleted"                 '{"ok":true}' "$(curl -s -X DELETE "$B/api/admin/webhooks/$HKID" "${A[@]}")"
+ck "gone from the list"      "" "$(curl -s $B/api/admin/webhooks "${A[@]}" | grep -o '127.0.0.1:9/dead')"
+curl -s -X PUT $B/api/admin/settings "${A[@]}" -H 'Content-Type: application/json' -d '{"webhook_allow_private":0}' -o/dev/null
+
 echo "== API key scopes =="
 mkkey() { curl -s -X POST $B/api/me/keys "${A[@]}" -H 'Content-Type: application/json' -d "$1" | sed 's/.*"key":"\([^"]*\)".*/\1/'; }
 KRO=$(mkkey '{"name":"ro","scopes":["read"]}')

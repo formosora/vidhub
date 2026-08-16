@@ -33,6 +33,14 @@ const M = {
   'key.noScopes':          ['至少选择一项权限', 'Pick at least one scope'],
   'key.badStatus':         ['状态取值无效', 'Invalid status'],
 
+  // ---- webhooks ----
+  'hook.badUrl':           ['需为 http(s) 地址', 'Must be an http(s) URL'],
+  'hook.privateTarget':    ['目标指向内网或回环地址；确需如此请在设置中开启「允许内网目标」',
+                            'That target resolves to a private or loopback address. Turn on "allow private targets" in settings if you really mean it.'],
+  'hook.unresolvable':     ['域名无法解析', 'That hostname does not resolve'],
+  'hook.notFound':         ['Webhook 不存在', 'No such webhook'],
+  'hook.badEvents':        ['事件名无效', 'Unknown event name'],
+
   // ---- users (admin) ----
   'user.notFound':         ['用户不存在', 'No such user'],
   'user.lastAdminLocked':  ['这是最后一个管理员，不能降权或禁用', 'This is the last administrator — cannot demote or disable'],

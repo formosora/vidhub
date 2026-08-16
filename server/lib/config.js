@@ -84,6 +84,11 @@ export const DEFAULTS = {
   session_remember_days: 30,        // 勾选「记住我」后的会话时长
   session_max_days: 90,             // 从首次登录起的硬上限, 0 = 不限
 
+  // ---- webhooks ----
+  webhook_timeout_sec: 10,          // 单次投递超时
+  webhook_retries: 3,               // 失败重试次数 (指数退避)
+  webhook_allow_private: 0,         // 允许投递到内网/回环地址 (默认禁止, 防 SSRF)
+
   // ---- visibility ----
   default_visibility: 'public',     // 新账号/游客上传的默认可见性: public | private
 
@@ -129,6 +134,8 @@ const LIMITS = {
   session_hours: [1, 24 * 365],
   session_remember_days: [1, 3650],
   session_max_days: [0, 3650],
+  webhook_timeout_sec: [1, 120],
+  webhook_retries: [1, 10],
 }
 
 /** Coerce an incoming setting to the shape its default declares. */

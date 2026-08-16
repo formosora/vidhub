@@ -8,7 +8,7 @@ import ShareBox from '../components/ShareBox.vue'
 import { toast } from '../toast'
 
 const router = useRouter()
-const tab = ref<'dash' | 'videos' | 'recycle' | 'users' | 'security' | 'settings'>('dash')
+const tab = ref<'dash' | 'videos' | 'recycle' | 'users' | 'security' | 'hooks' | 'settings'>('dash')
 
 // ================= dashboard =================
 interface AdminStats {
@@ -165,6 +165,54 @@ async function addHash() {
 }
 async function delHash(h: HashBlack) { await api(`/api/admin/hashblack/${h.sha256}`, { method: 'DELETE' }); loadSecurity() }
 
+// ================= webhooks =================
+interface Hook {
+  id: number; url: string; secret: string; events: string; status: string
+  note: string; failures: number; last_at: number; last_code: number; created: string
+}
+interface HookLog { id: number; hook_id: number; event: string; code: number; attempts: number; ok: number; msg: string; time: number }
+const hooks = ref<Hook[]>([])
+const hookEvents = ref<string[]>([])
+const hookLog = ref<HookLog[]>([])
+const newHook = ref({ url: '', events: [] as string[], note: '' })
+const testing = ref(0)
+
+async function loadHooks() {
+  const j = await (await api('/api/admin/webhooks')).json()
+  hooks.value = j.items || []
+  hookEvents.value = j.events || []
+  hookLog.value = ((await (await api('/api/admin/webhooks/log?size=30')).json()).items) || []
+}
+async function addHook() {
+  const res = await api('/api/admin/webhooks', {
+    method: 'POST',
+    body: JSON.stringify({ url: newHook.value.url, events: newHook.value.events.join(','), note: newHook.value.note }),
+  })
+  const j = await res.json().catch(() => ({}))
+  if (res.ok) { newHook.value = { url: '', events: [], note: '' }; loadHooks(); toast(t('ad.added')) }
+  else toast(j.error || t('c.failed'), false)
+}
+async function patchHook(h: Hook, patch: Record<string, unknown>) {
+  const res = await api(`/api/admin/webhooks/${h.id}`, { method: 'PATCH', body: JSON.stringify(patch) })
+  if (res.ok) { loadHooks(); toast(t('c.ok')) }
+  else toast((await res.json().catch(() => ({}))).error || t('c.failed'), false)
+}
+async function delHook(h: Hook) {
+  if (!confirm(t('hook.confirmDelete', h.url))) return
+  await api(`/api/admin/webhooks/${h.id}`, { method: 'DELETE' })
+  loadHooks()
+}
+async function testHook(h: Hook) {
+  testing.value = h.id
+  const res = await api(`/api/admin/webhooks/${h.id}/test`, { method: 'POST' })
+  testing.value = 0
+  const j = await res.json().catch(() => ({}))
+  if (j.ok) toast(t('hook.testOk', j.code))
+  else toast(t('hook.testFailed', j.code || '—', j.msg || ''), false)
+  loadHooks()
+}
+const fmtTime = (ms: number) => (ms ? new Date(ms).toISOString().slice(5, 16).replace('T', ' ') : '—')
+
 // ================= settings =================
 const settings = ref<Record<string, any>>({})
 const saving = ref(false)
@@ -198,6 +246,7 @@ function reload(which = tab.value) {
   if (which === 'recycle') loadBin()
   if (which === 'users') loadUsers()
   if (which === 'security') loadSecurity()
+  if (which === 'hooks') loadHooks()
   if (which === 'settings') loadSettings()
 }
 watch(tab, (to, from) => {
@@ -228,6 +277,7 @@ onMounted(async () => {
       <button class="tab" :class="{ on: tab === 'recycle' }" @click="tab = 'recycle'">{{ t('my.tabRecycle') }}</button>
       <button class="tab" :class="{ on: tab === 'users' }" @click="tab = 'users'">{{ t('ad.tabUsers') }}</button>
       <button class="tab" :class="{ on: tab === 'security' }" @click="tab = 'security'">{{ t('ad.tabSecurity') }}</button>
+      <button class="tab" :class="{ on: tab === 'hooks' }" @click="tab = 'hooks'">{{ t('ad.tabHooks') }}</button>
       <button class="tab" :class="{ on: tab === 'settings' }" @click="tab = 'settings'">{{ t('ad.tabSettings') }}</button>
     </div>
 
@@ -473,6 +523,78 @@ onMounted(async () => {
       </div>
     </template>
 
+    <!-- ============ Webhook ============ -->
+    <template v-if="tab === 'hooks'">
+      <div class="glass-card" style="padding:1.2rem;margin-bottom:1rem">
+        <h3 style="margin-top:0">{{ t('hook.add') }} <span class="muted2">— {{ t('hook.desc') }}</span></h3>
+        <div class="field">
+          <label>{{ t('hook.url') }}</label>
+          <input v-model="newHook.url" placeholder="https://example.com/hooks/vidhub" />
+        </div>
+        <div class="field">
+          <label>{{ t('hook.events') }} <span class="muted2">— {{ t('hook.eventsHint') }}</span></label>
+          <div class="scope-row">
+            <label v-for="e in hookEvents" :key="e" class="scope-opt" :class="{ on: newHook.events.includes(e) }">
+              <input type="checkbox" :value="e" v-model="newHook.events" />
+              <b>{{ e }}</b><small>{{ t('ev.' + e) }}</small>
+            </label>
+          </div>
+        </div>
+        <div class="row">
+          <input v-model="newHook.note" :placeholder="t('ad.note')" style="background:rgba(0,0,0,.28);border:1px solid var(--glass-border);color:var(--text);border-radius:10px;padding:.5rem .8rem;outline:none;flex:1" />
+          <button class="btn sm" @click="addHook">{{ t('ad.add') }}</button>
+        </div>
+        <p class="hint">{{ t('hook.signHint') }}</p>
+      </div>
+
+      <div class="glass-card" style="padding:.6rem 1rem;margin-bottom:1rem;overflow-x:auto">
+        <div v-for="h in hooks" :key="h.id" class="key-row">
+          <div class="grow" style="min-width:0">
+            <div>
+              <span class="mono">{{ h.url }}</span>
+              <span class="pill" :class="h.status === 'active' ? 'ok' : 'banned'">{{ h.status === 'active' ? t('ad.active') : t('ad.inactive') }}</span>
+              <span v-if="h.failures" class="pill banned">{{ t('hook.failures', h.failures) }}</span>
+            </div>
+            <div class="muted2" style="font-size:.72rem">
+              {{ h.events || t('hook.allEvents') }}
+              · {{ t('hook.lastAt', fmtTime(h.last_at), h.last_code || '—') }}
+              <template v-if="h.note"> · {{ h.note }}</template>
+            </div>
+            <div class="mono muted2" style="font-size:.7rem;overflow:hidden;text-overflow:ellipsis">{{ h.secret }}</div>
+          </div>
+          <div class="ops">
+            <button class="btn ghost sm" @click="copy(h.secret)">{{ t('hook.copySecret') }}</button>
+            <button class="btn ghost sm" :disabled="testing === h.id" @click="testHook(h)">{{ t('hook.test') }}</button>
+            <button class="btn ghost sm" @click="patchHook(h, { status: h.status === 'active' ? 'disabled' : 'active' })">
+              {{ h.status === 'active' ? t('ad.disable') : t('ad.enable') }}
+            </button>
+            <button class="btn danger sm" @click="delHook(h)">{{ t('c.delete') }}</button>
+          </div>
+        </div>
+        <p v-if="!hooks.length" class="muted" style="text-align:center;padding:1.2rem 0">{{ t('hook.none') }}</p>
+      </div>
+
+      <div class="glass-card" style="padding:1rem 1.2rem;overflow-x:auto">
+        <h3 style="margin:0 0 .6rem;font-size:.95rem">{{ t('hook.log') }}</h3>
+        <table class="tbl">
+          <thead><tr>
+            <th>{{ t('ad.time') }}</th><th>{{ t('hook.eventCol') }}</th>
+            <th>{{ t('ad.status') }}</th><th>{{ t('hook.attempts') }}</th><th>{{ t('ad.info') }}</th>
+          </tr></thead>
+          <tbody>
+            <tr v-for="l in hookLog" :key="l.id">
+              <td class="muted2" style="white-space:nowrap">{{ fmtTime(l.time) }}</td>
+              <td class="mono">{{ l.event }}</td>
+              <td><span class="pill" :class="l.ok ? 'ok' : 'banned'">{{ l.code || '—' }}</span></td>
+              <td>{{ l.attempts }}</td>
+              <td class="muted2">{{ l.msg }}</td>
+            </tr>
+            <tr v-if="!hookLog.length"><td colspan="5" class="muted">{{ t('hook.noLog') }}</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </template>
+
     <!-- ============ 设置 ============ -->
     <template v-if="tab === 'settings'">
       <div class="glass-card" style="padding:1.2rem 1.4rem">
@@ -638,6 +760,16 @@ onMounted(async () => {
           <div class="field" v-if="settings.ad_top"><label>{{ t('set.adTopHtml') }}</label><textarea v-model="settings.ad_top_info"></textarea></div>
           <div class="field" v-if="settings.ad_bot"><label>{{ t('set.adBotHtml') }}</label><textarea v-model="settings.ad_bot_info"></textarea></div>
           <div class="field" v-if="settings.player_ad"><label>{{ t('set.adPlayerHtml') }} <span class="muted2">{{ t('set.adPlayerHint') }}</span></label><textarea v-model="settings.player_ad_info"></textarea></div>
+        </div>
+
+        <div class="set-section">
+          <h3>{{ t('set.webhooks') }}</h3>
+          <div class="form-grid">
+            <div class="field"><label>{{ t('set.hookTimeout') }}</label><input v-model.number="settings.webhook_timeout_sec" type="number" min="1" max="120" /></div>
+            <div class="field"><label>{{ t('set.hookRetries') }}</label><input v-model.number="settings.webhook_retries" type="number" min="1" max="10" /></div>
+          </div>
+          <label class="switch"><input type="checkbox" v-model="settings.webhook_allow_private" :true-value="1" :false-value="0" /><span class="knob" /><span class="sw-label">{{ t('set.hookAllowPrivate') }}</span></label>
+          <p class="hint">{{ t('set.hookAllowPrivateHint') }}</p>
         </div>
 
         <div class="set-section">

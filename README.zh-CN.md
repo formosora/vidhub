@@ -112,6 +112,8 @@ docker run -d --name vidhub -p 8081:8080 \
 | `GET /api/admin/logs?ip=` | 上传日志（含 IP 归属地） |
 | `GET/POST /api/admin/iprules` · `DELETE …/<id>` | IP 黑白名单 |
 | `GET/POST /api/admin/hashblack` · `DELETE …/<sha256>` | 文件哈希黑名单 |
+| `GET/POST /api/admin/webhooks` · `PATCH/DELETE …/<id>` | Webhook 端点 |
+| `POST /api/admin/webhooks/<id>/test` · `GET …/webhooks/log` | 发送测试 / 投递日志 |
 
 ## 📁 结构
 
@@ -149,7 +151,7 @@ DATA_DIR=/tmp/vh-test PORT=8098 ADMIN_PASSWORD=TestPass123 node server/server.js
 BASE=http://localhost:8098 ADMIN_PASSWORD=TestPass123 bash test/smoke.sh
 ```
 
-`test/smoke.sh`（144 条断言，不需要 ffmpeg）——注册开关与验证码、可见性与广场过滤、
+`test/smoke.sh`（161 条断言，不需要 ffmpeg）——注册开关与验证码、可见性与广场过滤、
 分享链接格式、双语 API、上传内容不可执行、最后一个管理员不可锁死、公开接口不泄露
 IP、设置项越界钳制、隔离内容不可重传、配额与防盗链、越权边界、Range/路径穿越。
 
@@ -269,3 +271,41 @@ POST   /api/uploads/<id>/finish                    -> 与普通上传相同的�
 
 偏移量以服务端为准。分片起点若与当前偏移不符会被拒绝，并附上真实偏移，
 让客户端重新对齐而不是写坏文件。无人续传的会话 24 小时后清理。
+
+## 🔔 Webhook
+
+在「管理 → Webhook」中配置。事件异步排队投递，接收端慢或挂掉都不会拖住上传。
+
+| 事件 | 触发时机 |
+| --- | --- |
+| `upload.completed` | 文件处理完成、已可播放 |
+| `upload.rejected` | 上传被拒 —— 格式、大小、配额、哈希黑名单、分辨率 |
+| `moderation.flagged` | 内容审核隔离或删除了某个文件 |
+| `video.deleted` | 文件被永久删除 |
+| `user.registered` | 有人注册 |
+
+每次投递都带：
+
+```
+X-Vidhub-Event: upload.completed
+X-Vidhub-Delivery: <uuid>
+X-Vidhub-Timestamp: 1735689600000
+X-Vidhub-Signature: sha256=<hex>
+```
+
+签名为 `HMAC-SHA256(secret, "<时间戳>.<原始请求体>")`。**请在信任内容前先校验** ——
+URL 本身不是秘密。把时间戳纳入签名串，是为了让抓到的一次投递无法被重放。
+
+```js
+const want = 'sha256=' + createHmac('sha256', SECRET)
+  .update(`${req.headers['x-vidhub-timestamp']}.${rawBody}`).digest('hex')
+// 用 timingSafeEqual 比较，不要用 ===
+```
+
+失败按指数退避重试（`webhook_retries`，默认 3 次）。连续失败 20 次会自动停用该
+Webhook，而不是无休止地敲一个已经死掉的地址；重新启用会清零计数。每次尝试都记入
+投递日志，让"悄悄坏掉的集成"当场可见，而不是几周后才发现。
+
+> 解析到回环、链路本地或 RFC1918 地址的目标默认被拒绝。URL 虽然来自管理员，但
+> 管理员账号被攻陷时，不应该顺带把服务器变成内网探测器 —— 包括云元数据地址
+> `169.254.169.254`。接收端确实在内网时可开启 `webhook_allow_private`。

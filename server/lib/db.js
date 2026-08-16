@@ -46,6 +46,29 @@ CREATE TABLE IF NOT EXISTS api_keys (
   last_used INTEGER NOT NULL DEFAULT 0,
   created TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS webhooks (
+  id      INTEGER PRIMARY KEY AUTOINCREMENT,
+  url     TEXT NOT NULL,
+  secret  TEXT NOT NULL DEFAULT '',      -- HMAC-SHA256 key for X-Vidhub-Signature
+  events  TEXT NOT NULL DEFAULT '',      -- comma separated, '' = every event
+  status  TEXT NOT NULL DEFAULT 'active',
+  note    TEXT NOT NULL DEFAULT '',
+  failures INTEGER NOT NULL DEFAULT 0,   -- consecutive; resets on success
+  last_at INTEGER NOT NULL DEFAULT 0,
+  last_code INTEGER NOT NULL DEFAULT 0,
+  created TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS webhook_log (
+  id       INTEGER PRIMARY KEY AUTOINCREMENT,
+  hook_id  INTEGER NOT NULL,
+  event    TEXT NOT NULL DEFAULT '',
+  code     INTEGER NOT NULL DEFAULT 0,   -- HTTP status, 0 = never reached
+  attempts INTEGER NOT NULL DEFAULT 0,
+  ok       INTEGER NOT NULL DEFAULT 0,
+  msg      TEXT NOT NULL DEFAULT '',
+  time     INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_wlog_time ON webhook_log(time);
 -- Resumable uploads in progress. Bytes live in DATA_DIR/tmp/.part-<id>.
 CREATE TABLE IF NOT EXISTS uploads (
   id        TEXT PRIMARY KEY,

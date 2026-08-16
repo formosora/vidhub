@@ -19,6 +19,7 @@ import {
 import { hasFfmpeg } from './media.js'
 import { send, readJson, clientIp, today, newToken, nowIso } from './util.js'
 import { t, lang, AppError } from './i18n.js'
+import { EVENTS, checkTarget, deliverTest, emit } from './webhooks.js'
 import { unlinkSync, statSync } from 'node:fs'
 
 const tokenOf = req => (req.headers.authorization || '').replace(/^Bearer\s+/i, '')
@@ -89,6 +90,7 @@ export async function handleApi(req, res, path, url) {
       const u = createUser(b.username, b.password, 'uploader',
         confNum('register_daily_limit'), asVisibility(b.visibility) || conf('default_visibility'))
       noteRegistered(ip)
+      emit('user.registered', { id: u.id, username: u.username, ip })
       return send(res, 200, { token: openSession(u.id), username: u.username, role: u.role })
     } catch (e) {
       return e instanceof AppError ? fail(400, [e.key, ...e.params]) : fail(400, 'c.internal')
@@ -282,6 +284,7 @@ export async function handleApi(req, res, path, url) {
       const f = findFile(v); if (f) try { unlinkSync(f) } catch {}
       try { unlinkSync(thumbPath(name)) } catch {}
       q.run('DELETE FROM videos WHERE name=?', name)
+      emit('video.deleted', { name, orig: v.orig, size: v.size, username: v.username, by: user.username })
       return send(res, 200, { ok: true })
     }
     if (req.method === 'POST' && (action === 'ban' || action === 'unban')) {
@@ -474,6 +477,69 @@ export async function handleApi(req, res, path, url) {
     if (hbm && req.method === 'DELETE') {
       q.run('DELETE FROM hash_black WHERE sha256=?', hbm[1].toLowerCase())
       return send(res, 200, { ok: true })
+    }
+
+    // ---------- webhooks ----------
+    if (path === '/api/admin/webhooks' && req.method === 'GET')
+      return send(res, 200, {
+        events: EVENTS,
+        items: q.all('SELECT * FROM webhooks ORDER BY id DESC'),
+      })
+
+    if (path === '/api/admin/webhooks' && req.method === 'POST') {
+      const b = await readJson(req)
+      const bad = await checkTarget(String(b.url || ''))
+      if (bad) return fail(400, bad)
+      const events = String(b.events || '').split(',').map(s => s.trim()).filter(Boolean)
+      if (events.some(e => !EVENTS.includes(e))) return fail(400, 'hook.badEvents')
+      const secret = String(b.secret || '') || 'whsec_' + newToken().slice(0, 32)
+      const r = q.run(
+        'INSERT INTO webhooks(url, secret, events, note, created) VALUES(?,?,?,?,?)',
+        String(b.url), secret, events.join(','), String(b.note || ''), nowIso())
+      return send(res, 200, q.get('SELECT * FROM webhooks WHERE id=?', Number(r.lastInsertRowid)))
+    }
+
+    const hm = path.match(/^\/api\/admin\/webhooks\/(\d+)(\/test)?$/)
+    if (hm) {
+      const hook = q.get('SELECT * FROM webhooks WHERE id=?', Number(hm[1]))
+      if (!hook) return fail(404, 'hook.notFound')
+
+      if (req.method === 'POST' && hm[2]) {
+        const r = await deliverTest(hook)
+        return send(res, 200, { ok: r.ok, code: r.code, msg: r.msg || '' })
+      }
+      if (req.method === 'PATCH') {
+        const b = await readJson(req)
+        if (b.url !== undefined) {
+          const bad = await checkTarget(String(b.url))
+          if (bad) return fail(400, bad)
+          q.run('UPDATE webhooks SET url=? WHERE id=?', String(b.url), hook.id)
+        }
+        if (b.events !== undefined) {
+          const events = String(b.events).split(',').map(s => s.trim()).filter(Boolean)
+          if (events.some(e => !EVENTS.includes(e))) return fail(400, 'hook.badEvents')
+          q.run('UPDATE webhooks SET events=? WHERE id=?', events.join(','), hook.id)
+        }
+        if (['active', 'disabled'].includes(b.status))
+          // re-enabling clears the failure streak that disabled it
+          q.run('UPDATE webhooks SET status=?, failures=0 WHERE id=?', b.status, hook.id)
+        if (b.note !== undefined) q.run('UPDATE webhooks SET note=? WHERE id=?', String(b.note), hook.id)
+        return send(res, 200, q.get('SELECT * FROM webhooks WHERE id=?', hook.id))
+      }
+      if (req.method === 'DELETE') {
+        q.run('DELETE FROM webhooks WHERE id=?', hook.id)
+        q.run('DELETE FROM webhook_log WHERE hook_id=?', hook.id)
+        return send(res, 200, { ok: true })
+      }
+    }
+
+    if (path === '/api/admin/webhooks/log' && req.method === 'GET') {
+      const { size, off } = page(url, 30, 200)
+      const total = q.get('SELECT COUNT(*) c FROM webhook_log').c
+      return send(res, 200, {
+        total,
+        items: q.all('SELECT * FROM webhook_log ORDER BY id DESC LIMIT ? OFFSET ?', size, off),
+      })
     }
 
     if (path === '/api/admin/jobs' && req.method === 'GET')

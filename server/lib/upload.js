@@ -12,6 +12,7 @@ import * as media from './media.js'
 import { moderate } from './moderate.js'
 import { hashBlocked, logUpload, storageReason } from './security.js'
 import { safeName, nowIso } from './util.js'
+import { emit } from './webhooks.js'
 
 export const DATA_DIR = process.env.DATA_DIR || join(process.cwd(), 'data')
 export const VIDEOS_DIR = join(DATA_DIR, 'videos')
@@ -84,6 +85,14 @@ const safeReaddir = d => { try { return readdirSync(d) } catch { return [] } }
 
 export const thumbPath = name =>
   join(THUMBS_DIR, name.replace(/\.[^.]+$/, '') + '.jpg')
+
+/** The shape a webhook receiver sees for a stored item. */
+export const videoEvent = v => ({
+  name: v.name, orig: v.orig, size: v.size, kind: v.kind, ext: v.ext,
+  width: v.width, height: v.height, duration: v.duration,
+  status: v.status, visibility: v.visibility, username: v.username,
+  url: `/v/${v.name}`, player: `/p/${v.name}`, thumb: `/t/${v.name}`,
+})
 
 // ---------- serial job queue ----------
 
@@ -202,14 +211,18 @@ async function runPipeline(name) {
         try { unlinkSync(thumbPath(name)) } catch {}
         q.run("UPDATE videos SET status='recycled' WHERE name=?", name)
         q.run("UPDATE upload_logs SET status='banned', msg='mod.deleted' WHERE name=?", name)
+        emit('moderation.flagged', { name, orig: row.orig, username: row.username, score, action: 'delete' })
       } else {
         q.run("UPDATE videos SET status='banned' WHERE name=?", name)
         q.run("UPDATE upload_logs SET status='banned', msg='mod.quarantined' WHERE name=?", name)
+        emit('moderation.flagged', { name, orig: row.orig, username: row.username, score, action: 'ban' })
       }
       return
     }
   }
   q.run("UPDATE videos SET status='ok' WHERE name=? AND status='processing'", name)
+  const done = q.get('SELECT * FROM videos WHERE name=?', name)
+  if (done) emit('upload.completed', videoEvent(done))
 }
 
 // ---------- the public upload entry ----------
@@ -225,7 +238,8 @@ export async function acceptUpload(req, { user, ip, region, orig, visibility }) 
   const kind = classifyExt(ext)
   const logBase = { ip, region, user, orig }
   if (!kind) {
-    logUpload({ ...logBase, status: 'rejected', msg: 'up.badType' })
+    logUpload({ ...logBase, status: 'rejected', msg: ['up.badType'] })
+    emit('upload.rejected', { orig, reason: 'up.badType', username: user?.username ?? 'guest', ip })
     return { status: 400, error: ['up.badType'] }
   }
 
@@ -243,6 +257,7 @@ export async function acceptUpload(req, { user, ip, region, orig, visibility }) 
   if (declared > maxBytes) {
     req.resume()
     logUpload({ ...logBase, size: declared, status: 'rejected', msg: tooLarge })
+    emit('upload.rejected', { orig, reason: 'up.tooLarge', size: declared, username: user?.username ?? 'guest', ip })
     return { status: 413, error: tooLarge }
   }
 
@@ -264,17 +279,26 @@ export async function acceptUpload(req, { user, ip, region, orig, visibility }) 
  * and by the resumable one, which assembles its bytes across many requests.
  */
 export async function storeUpload({ tmp, up, orig, ext, kind, vis, user, ip, region, logBase }) {
+  /** One place to both answer and announce a refusal. */
+  const refuse = (status, why) => {
+    emit('upload.rejected', {
+      orig, reason: Array.isArray(why) ? why[0] : why,
+      username: user?.username ?? 'guest', ip,
+    })
+    return { status, error: why }
+  }
+
   if (hashBlocked(up.sha256)) {
     try { unlinkSync(tmp) } catch {}
     logUpload({ ...logBase, size: up.size, status: 'rejected', msg: ['up.hashBlocked'] })
-    return { status: 403, error: ['up.hashBlocked'] }
+    return refuse(403, ['up.hashBlocked'])
   }
 
   const overQuota = storageReason(up.size)
   if (overQuota) {
     try { unlinkSync(tmp) } catch {}
     logUpload({ ...logBase, size: up.size, status: 'rejected', msg: overQuota })
-    return { status: 507, error: overQuota }
+    return refuse(507, overQuota)
   }
 
   const name = `${up.sha256.slice(0, 16)}.${ext}`
@@ -290,7 +314,7 @@ export async function storeUpload({ tmp, up, orig, ext, kind, vis, user, ip, reg
     // out a link that only ever answers 451.
     if (dup.status === 'banned') {
       logUpload({ ...logBase, name: dup.name, size: up.size, status: 'rejected', msg: ['up.banned'] })
-      return { status: 403, error: ['up.banned'] }
+      return refuse(403, ['up.banned'])
     }
     logUpload({ ...logBase, name: dup.name, size: up.size, status: 'ok', msg: ['up.dedup'] })
     return { status: 200, body: links(dup.name, up.size, orig, dup.status, true, dup.visibility, kind) }
@@ -328,7 +352,7 @@ export async function storeUpload({ tmp, up, orig, ext, kind, vis, user, ip, reg
         q.run('DELETE FROM videos WHERE name=?', name)   // rejected outright, not recycled
         const why = ['up.tooSmall', meta.width, meta.height, mw, mh]
         logUpload({ ...logBase, name, size: up.size, status: 'rejected', msg: why })
-        return { status: 400, error: why }
+        return refuse(400, why)
       }
       q.run('UPDATE videos SET width=?, height=?, duration=? WHERE name=?',
         meta.width, meta.height, meta.duration || 0, name)
@@ -343,6 +367,10 @@ export async function storeUpload({ tmp, up, orig, ext, kind, vis, user, ip, reg
   else if (conf('check_img') && kind !== 'other' && await media.hasFfmpeg()) enqueue(name, 'pipeline')
 
   logUpload({ ...logBase, name, size: up.size, status: 'ok' })
+  if (!willProcess) {
+    const row = q.get('SELECT * FROM videos WHERE name=?', name)
+    if (row) emit('upload.completed', videoEvent(row))
+  }
   return { status: 200, body: links(name, up.size, orig, willProcess ? 'processing' : 'ok', false, vis, kind) }
 }
 
