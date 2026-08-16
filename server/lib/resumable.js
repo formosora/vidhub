@@ -42,6 +42,9 @@ export function sweepUploads() {
   if (dead.length) console.log(`[vidhub] cleared ${dead.length} abandoned upload session(s)`)
 }
 
+/** One person cannot hold open more than this many resumable sessions at once. */
+const MAX_OPEN_PER_USER = 10
+
 export function createUpload({ user, ip, orig, size, visibility }) {
   orig = safeName(orig || 'video.mp4')
   const ext = (orig.match(/\.(\w{2,5})$/)?.[1] || '').toLowerCase()
@@ -49,7 +52,16 @@ export function createUpload({ user, ip, orig, size, visibility }) {
 
   const declared = Number(size) || 0
   const maxBytes = Math.max(1, confNum('max_size_mb')) * 1024 * 1024
-  if (declared > maxBytes) return { status: 413, error: ['up.tooLarge', confNum('max_size_mb')] }
+  // A declared size must be a sane, positive number: a negative or NaN size
+  // skipped the finish-time completeness check, and the value is trusted for
+  // pre-flight quota/disk math.
+  if (!(declared >= 0) || declared > maxBytes) return { status: 413, error: ['up.tooLarge', confNum('max_size_mb')] }
+
+  // Opening sessions is cheap for the caller and costs the server a DB row plus a
+  // temp file each — cap how many one account can hold open so it cannot be used
+  // to pile up rows or squat reserved space.
+  const open = q.get('SELECT COUNT(*) c FROM uploads WHERE user_id = ?', user?.id ?? 0).c
+  if (open >= MAX_OPEN_PER_USER) return { status: 429, error: ['up.tooManySessions'] }
 
   const full = storageReason(declared) || diskReason(declared)
   if (full) return { status: 507, error: full }

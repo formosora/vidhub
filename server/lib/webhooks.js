@@ -24,18 +24,60 @@ export const EVENTS = [
 
 const LOG_KEEP = 500
 
+/** A bare IPv4 in a blocked range. */
+function isPrivateV4(a) {
+  if (/^(127\.|0\.|169\.254\.)/.test(a)) return true          // loopback, this-host, link-local
+  if (/^10\./.test(a)) return true                            // RFC1918
+  if (/^192\.168\./.test(a)) return true
+  if (/^172\.(1[6-9]|2\d|3[01])\./.test(a)) return true
+  if (/^100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\./.test(a)) return true  // CGNAT 100.64/10
+  return false
+}
+
 /**
  * Refuse loopback and private ranges by default. The URL comes from an admin,
  * but "admin account is compromised" should not also hand over a probe into the
  * private network — and a self-hosted box usually has plenty to find there.
+ *
+ * IPv6 is where this used to leak: `::ffff:127.0.0.1` (an IPv4-mapped address)
+ * and the compressed forms all resolve to loopback, but a naive prefix check
+ * waves them through. Every mapped form is unwrapped to its IPv4 and checked.
  */
-function isPrivateAddress(addr) {
-  if (/^(127\.|0\.|169\.254\.)/.test(addr)) return true
-  if (/^10\./.test(addr)) return true
-  if (/^192\.168\./.test(addr)) return true
-  if (/^172\.(1[6-9]|2\d|3[01])\./.test(addr)) return true
-  const v6 = addr.toLowerCase()
-  return v6 === '::1' || v6.startsWith('fc') || v6.startsWith('fd') || v6.startsWith('fe80')
+export function isPrivateAddress(addr) {
+  if (!addr) return true
+  let a = String(addr).toLowerCase().trim()
+  a = a.replace(/%.*$/, '')                                    // drop zone id (fe80::1%eth0)
+  if (isIP(a) === 4) return isPrivateV4(a)
+
+  // IPv4-mapped / -compatible IPv6: ::ffff:127.0.0.1, ::ffff:7f00:1, ::127.0.0.1
+  const mapped = a.match(/^::(?:ffff:)?(?:0:)?(\d+\.\d+\.\d+\.\d+)$/)
+  if (mapped) return isPrivateV4(mapped[1])
+  const mappedHex = a.match(/^::(?:ffff:)?([0-9a-f]{1,4}):([0-9a-f]{1,4})$/)
+  if (mappedHex) {
+    const hi = parseInt(mappedHex[1], 16), lo = parseInt(mappedHex[2], 16)
+    return isPrivateV4(`${hi >> 8}.${hi & 255}.${lo >> 8}.${lo & 255}`)
+  }
+
+  if (a === '::' || a === '::1') return true                   // unspecified, loopback
+  if (a.startsWith('fc') || a.startsWith('fd')) return true    // unique local fc00::/7
+  if (a.startsWith('fe8') || a.startsWith('fe9') || a.startsWith('fea') || a.startsWith('feb'))
+    return true                                                // link-local fe80::/10
+  return false
+}
+
+/**
+ * Resolve a host and reject if ANY address it maps to is private — a hostname
+ * with several A/AAAA records only needs one internal answer to be dangerous.
+ * Returns the vetted address list so delivery can pin to it and skip a second,
+ * separately-resolved (and therefore re-bindable) lookup.
+ */
+async function resolveGuard(host) {
+  try {
+    const addrs = (await lookup(host, { all: true })).map(r => r.address)
+    if (!addrs.length) return { error: 'hook.unresolvable' }
+    if (addrs.some(isPrivateAddress)) return { error: 'hook.privateTarget' }
+    return { addrs }
+  } catch { return { error: 'hook.unresolvable' } }
 }
 
 export async function checkTarget(raw) {
@@ -45,10 +87,7 @@ export async function checkTarget(raw) {
   if (conf('webhook_allow_private')) return null
   const host = u.hostname.replace(/^\[|\]$/g, '')
   if (isIP(host)) return isPrivateAddress(host) ? 'hook.privateTarget' : null
-  try {
-    const { address } = await lookup(host)
-    return isPrivateAddress(address) ? 'hook.privateTarget' : null
-  } catch { return 'hook.unresolvable' }
+  return (await resolveGuard(host)).error || null
 }
 
 export const sign = (secret, body, ts) =>
@@ -77,6 +116,22 @@ function logDelivery(hookId, event, { code = 0, attempts = 0, ok = false, msg = 
 async function attempt(hook, event, payload) {
   const body = JSON.stringify(payload)
   const ts = Date.now()
+
+  // Re-check the target at delivery time. checkTarget() ran when the hook was
+  // saved, but DNS can change between then and now — a rebinding attacker points
+  // the name at a public IP to pass the save, then flips it to loopback before
+  // this fires. Resolving and validating here closes that window.
+  if (!conf('webhook_allow_private')) {
+    let u
+    try { u = new URL(hook.url) } catch { return { code: 0, ok: false, msg: 'bad url' } }
+    const host = u.hostname.replace(/^\[|\]$/g, '')
+    if (isIP(host)) {
+      if (isPrivateAddress(host)) return { code: 0, ok: false, msg: 'blocked: private target' }
+    } else if ((await resolveGuard(host)).error) {
+      return { code: 0, ok: false, msg: 'blocked: private target' }
+    }
+  }
+
   const ctl = new AbortController()
   const timer = setTimeout(() => ctl.abort(), Math.max(1, confNum('webhook_timeout_sec')) * 1000)
   try {

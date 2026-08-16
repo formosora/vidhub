@@ -161,7 +161,7 @@ DATA_DIR=/tmp/vh-test PORT=8098 ADMIN_PASSWORD=TestPass123 node server/server.js
 BASE=http://localhost:8098 ADMIN_PASSWORD=TestPass123 bash test/smoke.sh
 ```
 
-`test/smoke.sh` — 167 assertions, no ffmpeg required. Covers registration and the
+`test/smoke.sh` — 179 assertions, no ffmpeg required. Covers registration and the
 CAPTCHA, visibility and gallery filtering, share-link formats, the bilingual API,
 uploads that must not be executable, the last administrator that must not be
 lockable, public endpoints that must not leak IPs, settings clamping, quarantined
@@ -347,6 +347,13 @@ forever; re-enabling clears the streak. Every attempt lands in the delivery log,
 so an integration that quietly stopped working is visible instead of being
 noticed weeks later.
 
+> Webhook targets are checked against loopback, link-local, RFC1918 and CGNAT
+> ranges — including IPv4-mapped IPv6 forms such as `::ffff:127.0.0.1` — both
+> when a hook is saved and again at delivery time, which closes the DNS-rebinding
+> window between the two. A sub-millisecond 0-TTL rebind between the delivery
+> re-check and the request itself remains theoretically possible; pin an egress
+> allowlist at the network layer if that matters for your threat model.
+>
 > Targets that resolve to loopback, link-local or RFC1918 addresses are refused
 > by default. The URL comes from an administrator, but a compromised admin
 > account should not also become a probe into your private network — including

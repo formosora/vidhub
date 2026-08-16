@@ -58,6 +58,7 @@ const M = {
   'up.quotaUser':          ['超过每日上传上限 ({0}/天)', 'Daily upload limit reached ({0}/day)'],
   'up.quotaIp':            ['该 IP 超过每日上传上限 ({0}/天)', 'This IP has hit its daily upload limit ({0}/day)'],
   'up.diskFull':           ['服务器磁盘空间不足，暂时无法上传', 'The server is out of disk space; uploads are paused'],
+  'up.tooManySessions':    ['未完成的上传会话过多，请先完成或取消', 'Too many unfinished upload sessions — finish or cancel some first'],
   'up.storageFull':        ['站点存储已达上限 ({0}GB)，请联系管理员清理', 'Site storage is full ({0}GB) — contact the administrator'],
   'up.dedup':              ['秒传(内容去重)', 'Instant upload (deduplicated)'],
 

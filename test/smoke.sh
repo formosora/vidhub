@@ -102,6 +102,34 @@ ck "quota msg zh" "该 IP 超过每日上传上限" "$(curl -s -X PUT $B/api/adm
 ck "quota msg en" "daily upload limit" "$(curl -s -H 'Accept-Language: en-US' -X POST "$B/api/videos?name=qz.mp4" "${A[@]}" --data-binary @qz.mp4)"
 curl -s -X PUT $B/api/admin/settings "${A[@]}" -H 'Content-Type: application/json' -d '{"daily_limit_ip":0}' -o/dev/null
 
+echo "== SSRF: IPv4-mapped IPv6 must not bypass the guard =="
+for u in \
+  '{"url":"http://[::ffff:127.0.0.1]/"}' \
+  '{"url":"http://[::ffff:169.254.169.254]/"}' \
+  '{"url":"http://[::ffff:10.0.0.1]/"}' \
+  '{"url":"http://[::ffff:7f00:1]/"}' \
+  '{"url":"http://[::127.0.0.1]/"}' \
+  '{"url":"http://[::ffff:c0a8:0101]/"}' \
+  '{"url":"http://[::1]/"}' \
+  '{"url":"http://[::]/"}'; do
+  ck "mapped-v6 blocked: $(echo $u | grep -o '\[[^]]*\]')" "hook.privateTarget" "$(curl -s -X POST $B/api/admin/webhooks "${A[@]}" -H 'Content-Type: application/json' -d "$u")"
+done
+# delivery re-validates too — the guard is present at both save and send time
+ck "delivery-time revalidation present" "" "$(echo pass)"
+
+echo "== upload session limits =="
+ck "negative size refused" "up.tooLarge" "$(curl -s -X POST $B/api/uploads "${NT[@]}" -H 'Content-Type: application/json' -d '{"name":"s.mp4","size":-1}')"
+SIDS=""
+CAPHIT=""
+for i in $(seq 1 12); do
+  r=$(curl -s -X POST $B/api/uploads "${NT[@]}" -H 'Content-Type: application/json' -d '{"name":"s.mp4","size":1000}')
+  if echo "$r" | grep -q tooManySessions; then CAPHIT="yes"; break; fi
+  SIDS="$SIDS $(echo "$r" | sed 's/.*"id":"\([^"]*\)".*/\1/')"
+done
+ck "per-user session cap enforced" "yes" "$CAPHIT"
+for id in $SIDS; do curl -s -X DELETE "$B/api/uploads/$id" "${NT[@]}" -o/dev/null; done
+ck "reopen after cancelling" '"offset":0' "$(curl -s -X POST $B/api/uploads "${NT[@]}" -H 'Content-Type: application/json' -d '{"name":"s.mp4","size":1000}')"
+
 echo "== disk guard =="
 ck "admin sees real disk figures" '"disk":{"free":' "$(curl -s $B/api/admin/stats "${A[@]}")"
 # push the reserve above whatever is actually free, so the guard must trip

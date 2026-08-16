@@ -151,7 +151,7 @@ DATA_DIR=/tmp/vh-test PORT=8098 ADMIN_PASSWORD=TestPass123 node server/server.js
 BASE=http://localhost:8098 ADMIN_PASSWORD=TestPass123 bash test/smoke.sh
 ```
 
-`test/smoke.sh`（167 条断言，不需要 ffmpeg）——注册开关与验证码、可见性与广场过滤、
+`test/smoke.sh`（179 条断言，不需要 ffmpeg）——注册开关与验证码、可见性与广场过滤、
 分享链接格式、双语 API、上传内容不可执行、最后一个管理员不可锁死、公开接口不泄露
 IP、设置项越界钳制、隔离内容不可重传、配额与防盗链、越权边界、Range/路径穿越。
 
@@ -306,6 +306,11 @@ const want = 'sha256=' + createHmac('sha256', SECRET)
 Webhook，而不是无休止地敲一个已经死掉的地址；重新启用会清零计数。每次尝试都记入
 投递日志，让"悄悄坏掉的集成"当场可见，而不是几周后才发现。
 
+> Webhook 目标会对回环、链路本地、RFC1918、CGNAT 段做校验 —— 包括
+> `::ffff:127.0.0.1` 这类 IPv4-mapped IPv6 写法 —— 在保存时和投递前各校验一次,
+> 关闭两者之间的 DNS 重绑定窗口。投递前二次校验与真正发起请求之间仍有亚毫秒级
+> 的 0-TTL 重绑定理论窗口;若你的威胁模型在意,请在网络层加出站白名单。
+>
 > 解析到回环、链路本地或 RFC1918 地址的目标默认被拒绝。URL 虽然来自管理员，但
 > 管理员账号被攻陷时，不应该顺带把服务器变成内网探测器 —— 包括云元数据地址
 > `169.254.169.254`。接收端确实在内网时可开启 `webhook_allow_private`。
