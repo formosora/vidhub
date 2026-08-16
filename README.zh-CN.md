@@ -151,7 +151,7 @@ DATA_DIR=/tmp/vh-test PORT=8098 ADMIN_PASSWORD=TestPass123 node server/server.js
 BASE=http://localhost:8098 ADMIN_PASSWORD=TestPass123 bash test/smoke.sh
 ```
 
-`test/smoke.sh`（161 条断言，不需要 ffmpeg）——注册开关与验证码、可见性与广场过滤、
+`test/smoke.sh`（167 条断言，不需要 ffmpeg）——注册开关与验证码、可见性与广场过滤、
 分享链接格式、双语 API、上传内容不可执行、最后一个管理员不可锁死、公开接口不泄露
 IP、设置项越界钳制、隔离内容不可重传、配额与防盗链、越权边界、Range/路径穿越。
 
@@ -160,7 +160,7 @@ DATA_DIR=/tmp/vh-pipe PORT=8097 ADMIN_PASSWORD=TestPass123 node server/server.js
 BASE=http://localhost:8097 DATA_DIR=/tmp/vh-pipe bash test/pipeline.sh
 ```
 
-`test/pipeline.sh`（28 条断言，需要 ffmpeg）——自己用 ffmpeg 造素材，验证真实
+`test/pipeline.sh`（33 条断言，需要 ffmpeg）——自己用 ffmpeg 造素材，验证真实
 转码后公开链接不失效、水印像素级确实烧录、`max_width` 等比缩放、最低分辨率
 拦截、图片管线、本地鉴黄命中隔离。
 
@@ -309,3 +309,26 @@ Webhook，而不是无休止地敲一个已经死掉的地址；重新启用会�
 > 解析到回环、链路本地或 RFC1918 地址的目标默认被拒绝。URL 虽然来自管理员，但
 > 管理员账号被攻陷时，不应该顺带把服务器变成内网探测器 —— 包括云元数据地址
 > `169.254.169.254`。接收端确实在内网时可开启 `webhook_allow_private`。
+
+## ▶ 秒开（faststart）
+
+MP4 的索引（`moov` atom）可以放在媒体数据之前或之后，而**多数编码器写在之后**。
+浏览器拿不到索引就渲染不出任何一帧，于是这种文件必须整个下载完才会出画面——
+500MB 的片子就是先等 500MB。这是文件布局问题，不是带宽问题，**网络再快也没用**。
+
+vidhub 会检查每个存储的 mp4/m4v/mov，索引在后就把它重排到前面。只复制流、不
+重新编码，几秒完事且逐位一致——测试套件会断言视频流 MD5 未变。如果你有理由
+保持文件与上传时完全一致，可以关掉 `faststart`。
+
+## 💾 磁盘
+
+`storage_quota_gb` 是你设定的运营策略，它下面还有个物理极限，现在会被直接监控：
+
+| 设置 | 默认 | 作用 |
+| --- | --- | --- |
+| `disk_reserve_gb` | 2 | 剩余空间将低于此值时拒绝新上传 |
+| `disk_warn_gb` | 10 | 低于此值后台概览转红，并触发 `storage.low`（每小时最多一次） |
+
+没有这道保险时，磁盘写满表现为半个文件和 SQLite 抛 500 —— 而站长第一次知道
+是用户来报错的时候。提前用明确的提示拒绝，能给数据库留出继续写入的余量。
+后台概览显示真实的剩余/总容量。任一项设为 0 即关闭。

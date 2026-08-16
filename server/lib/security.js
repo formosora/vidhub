@@ -4,6 +4,8 @@
  */
 import { q } from './db.js'
 import { conf, confNum } from './config.js'
+import { statfsSync } from 'node:fs'
+import { join } from 'node:path'
 import { ipMatches, nowIso, today } from './util.js'
 
 // ---------- IP black/white list ----------
@@ -54,6 +56,41 @@ export function storageReason(incomingBytes = 0) {
   const cap = gb * 1024 ** 3
   if (used + incomingBytes > cap) return ['up.storageFull', gb]
   return null
+}
+
+// ---------- real disk space ----------
+
+const DATA_DIR = process.env.DATA_DIR || join(process.cwd(), 'data')
+
+/** Actual filesystem figures for the data directory, or null if unavailable. */
+export function diskInfo() {
+  try {
+    const s = statfsSync(DATA_DIR)
+    return { free: s.bavail * s.bsize, total: s.blocks * s.bsize }
+  } catch { return null }
+}
+
+/**
+ * `storage_quota_gb` is a policy the operator sets; this is the physical limit
+ * underneath it. Without this check a full disk shows up as half-written files
+ * and 500s from SQLite — the first sign of trouble being a user complaint.
+ * Refusing early keeps a reserve so the database can still write.
+ */
+export function diskReason(incomingBytes = 0) {
+  const reserve = confNum('disk_reserve_gb') * 1024 ** 3
+  if (reserve <= 0) return null
+  const d = diskInfo()
+  if (!d) return null                       // platform without statfs — don't block
+  if (d.free - incomingBytes < reserve) return ['up.diskFull']
+  return null
+}
+
+/** True while free space is under the warning threshold. */
+export function diskLow() {
+  const warnGb = confNum('disk_warn_gb')
+  if (warnGb <= 0) return false
+  const d = diskInfo()
+  return !!d && d.free < warnGb * 1024 ** 3
 }
 
 // ---------- hash blacklist ----------

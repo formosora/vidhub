@@ -136,6 +136,43 @@ ck "quarantined stream 451"     "451" "$(curl -s -o/dev/null -w '%{http_code}' "
 ck "benign clip left published" '"status":"ok"' "$(curl -s "$B/api/videos/$N" "${A[@]}")"
 set_conf '{"check_img":0}'
 
+echo "== faststart (index moved to the front) =="
+set_conf '{"faststart":1,"convert_to":"","compress":0,"watermark":0,"max_width":0}'
+ffmpeg -v error -y -f lavfi -i testsrc2=size=640x360:rate=25:duration=5 -c:v libx264 -pix_fmt yuv420p "$M/slow.mp4"
+
+# Walk the top-level boxes and report whether moov precedes mdat.
+boxorder() {
+  node -e "
+const fs = require('fs');
+const b = fs.readFileSync(process.argv[1]);
+let pos = 0, out = [];
+while (pos < b.length - 8) {
+  const s = b.readUInt32BE(pos), t = b.toString('ascii', pos + 4, pos + 8);
+  if (!/^[a-zA-Z0-9]{4}$/.test(t) || s < 8) break;
+  out.push(t); pos += s;
+}
+const mo = out.indexOf('moov'), md = out.indexOf('mdat');
+console.log(mo >= 0 && md >= 0 && mo < md ? 'FRONT' : 'BACK');
+" "$1"
+}
+
+ck "encoder wrote moov at the back" "BACK" "$(boxorder "$M/slow.mp4")"
+NFS=$(upload slow.mp4 | sed 's/.*"name":"\([^"]*\)".*/\1/')
+ck "processed"                      "ok" "$(wait_done "$NFS")"
+ck "stored copy starts instantly"   "FRONT" "$(boxorder "$(diskfile "$NFS")")"
+ck "remux was lossless"             "SAME" "$(node -e "
+const { execFileSync } = require('child_process');
+const md5 = f => execFileSync('ffmpeg', ['-v', 'error', '-i', f, '-map', '0:v', '-c', 'copy', '-f', 'md5', '-']).toString().trim();
+console.log(md5(process.argv[1]) === md5(process.argv[2]) ? 'SAME' : 'DIFFERENT');
+" "$M/slow.mp4" "$(diskfile "$NFS")")"
+
+set_conf '{"faststart":0}'
+ffmpeg -v error -y -f lavfi -i testsrc2=size=320x240:rate=25:duration=3 -c:v libx264 -pix_fmt yuv420p "$M/slow2.mp4"
+NFS2=$(upload slow2.mp4 | sed 's/.*"name":"\([^"]*\)".*/\1/')
+wait_done "$NFS2" > /dev/null
+ck "switch respects being turned off" "BACK" "$(boxorder "$(diskfile "$NFS2")")"
+set_conf '{"faststart":1}'
+
 rm -rf "$M"
 echo
 echo "================  $pass passed, $fail failed  ================"

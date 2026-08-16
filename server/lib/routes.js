@@ -10,7 +10,7 @@ import {
 } from './auth.js'
 import { issueCaptcha, verifyCaptcha } from './captcha.js'
 import {
-  ipBlockReason, quotaReason, logUpload, locateIp, storageReason,
+  ipBlockReason, quotaReason, logUpload, locateIp, storageReason, diskReason, diskInfo,
 } from './security.js'
 import { acceptUpload, findFile, thumbPath } from './upload.js'
 import {
@@ -175,7 +175,7 @@ export async function handleApi(req, res, path, url) {
     if (blocked) { logUpload({ ip, user, status: 'rejected', msg: blocked }); return fail(403, blocked) }
     const over = quotaReason(ip, user)
     if (over) { logUpload({ ip, user, status: 'rejected', msg: over }); return fail(429, over) }
-    const full = storageReason()
+    const full = storageReason() || diskReason()
     if (full) { logUpload({ ip, user, status: 'rejected', msg: full }); return fail(507, full) }
     const region = await locateIp(ip)
     const orig = url.searchParams.get('name') || 'video.mp4'
@@ -579,6 +579,7 @@ function buildStats({ admin = false, userId = null } = {}) {
     out.banned = q.get("SELECT COUNT(*) c FROM videos WHERE status='banned'").c
     out.recycled = q.get("SELECT COUNT(*) c FROM videos WHERE status='recycled'").c
     out.todayUploads = q.get('SELECT COUNT(*) c FROM upload_logs WHERE time LIKE ?', today() + '%').c
+    out.disk = diskInfo()
     out.topIps = q.all("SELECT ip, region, COUNT(*) c FROM upload_logs WHERE time LIKE ? GROUP BY ip ORDER BY c DESC LIMIT 10", today() + '%')
   }
   return out

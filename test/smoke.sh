@@ -102,6 +102,27 @@ ck "quota msg zh" "该 IP 超过每日上传上限" "$(curl -s -X PUT $B/api/adm
 ck "quota msg en" "daily upload limit" "$(curl -s -H 'Accept-Language: en-US' -X POST "$B/api/videos?name=qz.mp4" "${A[@]}" --data-binary @qz.mp4)"
 curl -s -X PUT $B/api/admin/settings "${A[@]}" -H 'Content-Type: application/json' -d '{"daily_limit_ip":0}' -o/dev/null
 
+echo "== disk guard =="
+ck "admin sees real disk figures" '"disk":{"free":' "$(curl -s $B/api/admin/stats "${A[@]}")"
+# push the reserve above whatever is actually free, so the guard must trip
+RESERVE=$(curl -s $B/api/admin/stats "${A[@]}" | node -e "
+let b=[];process.stdin.on('data',d=>b.push(d)).on('end',()=>{
+  const d=JSON.parse(Buffer.concat(b).toString()).disk;
+  console.log(d ? Math.ceil(d.free/1024**3)+50 : 0);
+})")
+head -c 20000 /dev/urandom > disk.mp4
+if [ "$RESERVE" != "0" ]; then
+  curl -s -X PUT $B/api/admin/settings "${A[@]}" -H 'Content-Type: application/json' -d "{\"disk_reserve_gb\":$RESERVE}" -o/dev/null
+  ck "upload refused when low"    "up.diskFull" "$(curl -s -X POST "$B/api/videos?name=disk.mp4" "${A[@]}" --data-binary @disk.mp4)"
+  ck "resumable refused too"      "up.diskFull" "$(curl -s -X POST $B/api/uploads "${A[@]}" -H 'Content-Type: application/json' -d '{"name":"disk.mp4","size":20000}')"
+  ck "refusal is localised"       "out of disk space" "$(curl -s -H 'Accept-Language: en' -X POST "$B/api/videos?name=disk.mp4" "${A[@]}" --data-binary @disk.mp4)"
+  curl -s -X PUT $B/api/admin/settings "${A[@]}" -H 'Content-Type: application/json' -d '{"disk_reserve_gb":2}' -o/dev/null
+  ck "allowed again once healthy" "200" "$(curl -s -o/dev/null -w '%{http_code}' -X POST "$B/api/videos?name=disk.mp4" "${A[@]}" --data-binary @disk.mp4)"
+else
+  echo "  SKIP  platform without statfs"
+fi
+ck "storage.low is a known event" "storage.low" "$(curl -s $B/api/admin/webhooks "${A[@]}")"
+
 echo "== webhooks =="
 ck "SSRF: loopback refused"  "hook.privateTarget" "$(curl -s -X POST $B/api/admin/webhooks "${A[@]}" -H 'Content-Type: application/json' -d '{"url":"http://127.0.0.1:9/x"}')"
 ck "SSRF: rfc1918 refused"   "hook.privateTarget" "$(curl -s -X POST $B/api/admin/webhooks "${A[@]}" -H 'Content-Type: application/json' -d '{"url":"http://10.0.0.1/x"}')"

@@ -48,6 +48,9 @@ export const DEFAULTS = {
   resize_enabled: 0,                // 强制输出指定宽高 (等比缩放)
   resize_w: 0,
   resize_h: 0,
+  // 保证 mp4/mov 的 moov 索引在文件前部, 否则浏览器要下完整个文件才能出第一帧。
+  // 只做容器重排 (stream copy), 不重新编码。
+  faststart: 1,
   thumbnail: 1,
   thumbnail_w: 320,
   image_compress: 0,                // 图片压缩 (质量%)
@@ -83,6 +86,12 @@ export const DEFAULTS = {
   session_hours: 12,                // 普通会话时长; 活跃时自动滑动续期
   session_remember_days: 30,        // 勾选「记住我」后的会话时长
   session_max_days: 90,             // 从首次登录起的硬上限, 0 = 不限
+
+  // ---- disk ----
+  // storage_quota_gb 是运营策略, 这两个是物理保险: 低于 reserve 直接拒绝上传,
+  // 低于 warn 在后台提示并触发 storage.low 事件。
+  disk_reserve_gb: 2,               // 剩余空间低于此值时拒绝新上传, 0 = 不检查
+  disk_warn_gb: 10,                 // 低水位告警阈值, 0 = 不告警
 
   // ---- webhooks ----
   webhook_timeout_sec: 10,          // 单次投递超时
@@ -136,6 +145,8 @@ const LIMITS = {
   session_max_days: [0, 3650],
   webhook_timeout_sec: [1, 120],
   webhook_retries: [1, 10],
+  disk_reserve_gb: [0, 10000],
+  disk_warn_gb: [0, 10000],
 }
 
 /** Coerce an incoming setting to the shape its default declares. */

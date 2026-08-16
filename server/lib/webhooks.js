@@ -19,6 +19,7 @@ export const EVENTS = [
   'moderation.flagged',   // quarantined or deleted by moderation
   'video.deleted',        // permanently removed
   'user.registered',      // self-service sign-up
+  'storage.low',          // free disk space crossed the warning threshold
 ]
 
 const LOG_KEEP = 500

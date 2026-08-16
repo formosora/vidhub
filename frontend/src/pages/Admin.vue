@@ -14,6 +14,7 @@ const tab = ref<'dash' | 'videos' | 'recycle' | 'users' | 'security' | 'hooks' |
 interface AdminStats {
   total: number; totalSize: number; views: number; users: number; banned: number
   recycled: number; todayUploads: number
+  disk?: { free: number; total: number } | null
   byDay: { date: string; count: number; size: number }[]
   topIps: { ip: string; region: string; c: number }[]
 }
@@ -21,6 +22,13 @@ const stats = ref<AdminStats | null>(null)
 interface Job { id: string; name: string; type: string; status: string; msg: string; created: string }
 const jobs = ref<Job[]>([])
 const ffmpegOk = ref<boolean | null>(null)
+
+/** Mirrors the server's disk_warn_gb so the tile turns red at the same point. */
+const diskLow = computed(() => {
+  const d = stats.value?.disk
+  const warn = Number(settings.value?.disk_warn_gb ?? 10)
+  return !!d && warn > 0 && d.free < warn * 1024 ** 3
+})
 
 async function loadDash() {
   const [s, j, c] = await Promise.all([
@@ -293,6 +301,10 @@ onMounted(async () => {
         <div class="glass-card stat-card"><b>{{ stats?.todayUploads ?? '—' }}</b><span>{{ t('ad.statToday') }}</span></div>
         <div class="glass-card stat-card"><b>{{ stats?.users ?? '—' }}</b><span>{{ t('ad.statUsers') }}</span></div>
         <div class="glass-card stat-card"><b style="color:var(--red)">{{ stats?.banned ?? '—' }}</b><span>{{ t('ad.statBanned') }}</span></div>
+        <div class="glass-card stat-card" v-if="stats?.disk">
+          <b :style="diskLow ? 'color:var(--red)' : ''">{{ fmtSize(stats.disk.free) }}</b>
+          <span>{{ t('ad.diskFree', fmtSize(stats.disk.total)) }}</span>
+        </div>
       </div>
 
       <div class="glass-card" style="padding:1rem 1.2rem;margin-bottom:1rem">
@@ -658,6 +670,7 @@ onMounted(async () => {
             <label class="switch"><input type="checkbox" v-model="settings.process_enabled" :true-value="1" :false-value="0" /><span class="knob" /><span class="sw-label">{{ t('set.processEnabled') }}</span></label>
             <label class="switch"><input type="checkbox" v-model="settings.compress" :true-value="1" :false-value="0" /><span class="knob" /><span class="sw-label">{{ t('set.compress') }}</span></label>
             <label class="switch"><input type="checkbox" v-model="settings.thumbnail" :true-value="1" :false-value="0" /><span class="knob" /><span class="sw-label">{{ t('set.thumbnail') }}</span></label>
+            <label class="switch"><input type="checkbox" v-model="settings.faststart" :true-value="1" :false-value="0" /><span class="knob" /><span class="sw-label">{{ t('set.faststart') }}</span></label>
           </div>
           <div class="form-grid">
             <div class="field"><label>{{ t('set.convertTo') }}</label>
@@ -760,6 +773,15 @@ onMounted(async () => {
           <div class="field" v-if="settings.ad_top"><label>{{ t('set.adTopHtml') }}</label><textarea v-model="settings.ad_top_info"></textarea></div>
           <div class="field" v-if="settings.ad_bot"><label>{{ t('set.adBotHtml') }}</label><textarea v-model="settings.ad_bot_info"></textarea></div>
           <div class="field" v-if="settings.player_ad"><label>{{ t('set.adPlayerHtml') }} <span class="muted2">{{ t('set.adPlayerHint') }}</span></label><textarea v-model="settings.player_ad_info"></textarea></div>
+        </div>
+
+        <div class="set-section">
+          <h3>{{ t('set.disk') }}</h3>
+          <div class="form-grid">
+            <div class="field"><label>{{ t('set.diskReserve') }}</label><input v-model.number="settings.disk_reserve_gb" type="number" min="0" /></div>
+            <div class="field"><label>{{ t('set.diskWarn') }}</label><input v-model.number="settings.disk_warn_gb" type="number" min="0" /></div>
+          </div>
+          <p class="hint">{{ t('set.diskHint') }}</p>
         </div>
 
         <div class="set-section">

@@ -57,6 +57,7 @@ const M = {
   'up.tooSmall':           ['分辨率 {0}x{1} 低于最低限制 {2}x{3}', 'Resolution {0}x{1} is below the {2}x{3} minimum'],
   'up.quotaUser':          ['超过每日上传上限 ({0}/天)', 'Daily upload limit reached ({0}/day)'],
   'up.quotaIp':            ['该 IP 超过每日上传上限 ({0}/天)', 'This IP has hit its daily upload limit ({0}/day)'],
+  'up.diskFull':           ['服务器磁盘空间不足，暂时无法上传', 'The server is out of disk space; uploads are paused'],
   'up.storageFull':        ['站点存储已达上限 ({0}GB)，请联系管理员清理', 'Site storage is full ({0}GB) — contact the administrator'],
   'up.dedup':              ['秒传(内容去重)', 'Instant upload (deduplicated)'],
 

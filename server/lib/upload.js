@@ -10,7 +10,7 @@ import { q } from './db.js'
 import { conf, confNum } from './config.js'
 import * as media from './media.js'
 import { moderate } from './moderate.js'
-import { hashBlocked, logUpload, storageReason } from './security.js'
+import { hashBlocked, logUpload, storageReason, diskReason, diskLow, diskInfo } from './security.js'
 import { safeName, nowIso } from './util.js'
 import { emit } from './webhooks.js'
 
@@ -93,6 +93,21 @@ export const videoEvent = v => ({
   status: v.status, visibility: v.visibility, username: v.username,
   url: `/v/${v.name}`, player: `/p/${v.name}`, thumb: `/t/${v.name}`,
 })
+
+/**
+ * Announce a low-disk condition once per hour at most. Firing on every upload
+ * would bury the receiver; staying silent means the operator finds out when
+ * uploads start failing.
+ */
+let lastDiskWarn = 0
+function noteDiskLevel() {
+  if (!diskLow()) { lastDiskWarn = 0; return }
+  if (Date.now() - lastDiskWarn < 3600_000) return
+  lastDiskWarn = Date.now()
+  const d = diskInfo()
+  emit('storage.low', { free: d?.free ?? 0, total: d?.total ?? 0, warn_gb: confNum('disk_warn_gb') })
+  console.warn(`[vidhub] low disk: ${((d?.free ?? 0) / 1024 ** 3).toFixed(1)}GB free`)
+}
 
 // ---------- serial job queue ----------
 
@@ -200,6 +215,29 @@ async function runPipeline(name) {
       after.width, after.height, after.duration || 0, name)
   }
 
+  /*
+   * Guarantee the index sits at the front. Without this a file that needed no
+   * transcoding is stored exactly as the encoder wrote it — usually with moov
+   * after mdat, which forces the browser to download the whole thing before
+   * showing a single frame. It is a stream copy, so it costs seconds and loses
+   * nothing, and it is the difference between a 500MB video starting instantly
+   * and starting after 500MB.
+   */
+  const row2 = q.get('SELECT ext FROM videos WHERE name=?', name)
+  if (conf('faststart') && row.kind === 'video' && media.canFaststart(row2?.ext) &&
+      await media.needsFaststart(file)) {
+    const out = await attempt('faststart', media.remuxFaststart(file))
+    if (out && existsSync(out)) {
+      try {
+        renameSync(out, file)
+        q.run('UPDATE videos SET size=? WHERE name=?', statSync(file).size, name)
+      } catch (e) {
+        console.error(`[pipeline ${name}] faststart swap failed: ${e.message}`)
+        try { unlinkSync(out) } catch {}
+      }
+    }
+  }
+
   // moderation on the final stored file
   const finalFile = file
   if (finalFile && conf('check_img')) {
@@ -294,7 +332,7 @@ export async function storeUpload({ tmp, up, orig, ext, kind, vis, user, ip, reg
     return refuse(403, ['up.hashBlocked'])
   }
 
-  const overQuota = storageReason(up.size)
+  const overQuota = storageReason(up.size) || diskReason(up.size)
   if (overQuota) {
     try { unlinkSync(tmp) } catch {}
     logUpload({ ...logBase, size: up.size, status: 'rejected', msg: overQuota })
@@ -366,6 +404,7 @@ export async function storeUpload({ tmp, up, orig, ext, kind, vis, user, ip, reg
   if (willProcess) enqueue(name, 'pipeline')
   else if (conf('check_img') && kind !== 'other' && await media.hasFfmpeg()) enqueue(name, 'pipeline')
 
+  noteDiskLevel()
   logUpload({ ...logBase, name, size: up.size, status: 'ok' })
   if (!willProcess) {
     const row = q.get('SELECT * FROM videos WHERE name=?', name)

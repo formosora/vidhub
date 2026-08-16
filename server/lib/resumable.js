@@ -22,7 +22,7 @@ import { join } from 'node:path'
 import { q } from './db.js'
 import { conf, confNum } from './config.js'
 import { classifyExt, storeUpload, TMP_DIR } from './upload.js'
-import { hashBlocked, logUpload, storageReason } from './security.js'
+import { hashBlocked, logUpload, storageReason, diskReason } from './security.js'
 import { safeName } from './util.js'
 
 /** 8 MiB balances round-trips against how much is lost when one chunk fails. */
@@ -51,7 +51,7 @@ export function createUpload({ user, ip, orig, size, visibility }) {
   const maxBytes = Math.max(1, confNum('max_size_mb')) * 1024 * 1024
   if (declared > maxBytes) return { status: 413, error: ['up.tooLarge', confNum('max_size_mb')] }
 
-  const full = storageReason(declared)
+  const full = storageReason(declared) || diskReason(declared)
   if (full) return { status: 507, error: full }
 
   const vis = visibility === 'private' || visibility === 'public'

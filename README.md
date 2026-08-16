@@ -161,7 +161,7 @@ DATA_DIR=/tmp/vh-test PORT=8098 ADMIN_PASSWORD=TestPass123 node server/server.js
 BASE=http://localhost:8098 ADMIN_PASSWORD=TestPass123 bash test/smoke.sh
 ```
 
-`test/smoke.sh` — 161 assertions, no ffmpeg required. Covers registration and the
+`test/smoke.sh` — 167 assertions, no ffmpeg required. Covers registration and the
 CAPTCHA, visibility and gallery filtering, share-link formats, the bilingual API,
 uploads that must not be executable, the last administrator that must not be
 lockable, public endpoints that must not leak IPs, settings clamping, quarantined
@@ -173,7 +173,7 @@ DATA_DIR=/tmp/vh-pipe PORT=8097 ADMIN_PASSWORD=TestPass123 node server/server.js
 BASE=http://localhost:8097 DATA_DIR=/tmp/vh-pipe bash test/pipeline.sh
 ```
 
-`test/pipeline.sh` — 28 assertions, needs ffmpeg. Generates its own footage, then
+`test/pipeline.sh` — 33 assertions, needs ffmpeg. Generates its own footage, then
 checks that a public link survives a real transcode, that the watermark is
 genuinely burned into the pixels, that `max_width` scaling works, and that the
 minimum-resolution gate, image pipeline and local moderation all behave.
@@ -352,3 +352,32 @@ noticed weeks later.
 > account should not also become a probe into your private network — including
 > `169.254.169.254`, the cloud metadata endpoint. Set `webhook_allow_private`
 > if your receiver genuinely is internal.
+
+## ▶ Instant start (faststart)
+
+An MP4 carries its index — the `moov` atom — either before or after the media
+data, and most encoders write it **after**. A browser cannot render a frame
+until it has that index, so such a file has to be downloaded in full before
+anything appears: a 500MB clip means a 500MB wait. This is a file-layout
+problem, not a bandwidth one; a fast connection does not help.
+
+vidhub checks every stored mp4/m4v/mov and, when the index is at the back,
+remuxes it to the front. Streams are copied, never re-encoded, so it takes
+seconds and the video is bit-for-bit identical — the test suite asserts the
+video stream MD5 is unchanged. Turn it off with `faststart` if you have a
+reason to keep files exactly as uploaded.
+
+## 💾 Disk
+
+`storage_quota_gb` is the policy you set. Underneath it sits the physical
+limit, which vidhub now watches directly:
+
+| Setting | Default | Effect |
+| --- | --- | --- |
+| `disk_reserve_gb` | 2 | Refuse new uploads once free space would drop below this |
+| `disk_warn_gb` | 10 | Below this the admin dashboard turns red and `storage.low` fires (at most hourly) |
+
+Without the reserve, a full disk shows up as half-written files and 500s from
+SQLite — and the first sign of trouble is a user complaint. Refusing early with
+a clear message keeps enough headroom for the database to keep writing. Free
+and total space appear on the admin overview. Set either to 0 to disable.

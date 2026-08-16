@@ -6,7 +6,8 @@
  */
 import { spawn } from 'node:child_process'
 import { existsSync } from 'node:fs'
-import { join, basename } from 'node:path'
+import { open } from 'node:fs/promises'
+import { join, basename, extname } from 'node:path'
 import { conf } from './config.js'
 
 const FFMPEG = process.env.FFMPEG_PATH || 'ffmpeg'
@@ -32,6 +33,63 @@ export async function hasFfmpeg() {
   catch { _hasFfmpeg = false }
   if (!_hasFfmpeg) console.log('[vidhub] ffmpeg not found — transcoding/moderation disabled, storing originals')
   return _hasFfmpeg
+}
+
+// ---------- faststart ----------
+
+/** Containers where the moov/mdat order decides whether playback can start early. */
+const FASTSTART_EXTS = new Set(['mp4', 'm4v', 'mov'])
+export const canFaststart = ext => FASTSTART_EXTS.has(String(ext || '').toLowerCase())
+
+/**
+ * True when the index sits *after* the media data.
+ *
+ * A browser cannot render a frame until it has the moov atom, so a file laid
+ * out mdat-then-moov has to be downloaded in full before anything appears —
+ * a 500MB clip means a 500MB wait no matter how fast the connection is.
+ * Most encoders (ffmpeg included) write this layout by default.
+ *
+ * Only box headers are read, never the payload, so this costs a few reads.
+ */
+export async function needsFaststart(file) {
+  let fh
+  try {
+    fh = await open(file, 'r')
+    const { size } = await fh.stat()
+    const head = Buffer.alloc(16)
+    let pos = 0, sawMdat = false
+    while (pos + 8 <= size) {
+      const { bytesRead } = await fh.read(head, 0, 16, pos)
+      if (bytesRead < 8) break
+      let boxSize = head.readUInt32BE(0)
+      const type = head.toString('latin1', 4, 8)
+      if (!/^[\x20-\x7e]{4}$/.test(type)) return false      // not a box tree we understand
+      let headerLen = 8
+      if (boxSize === 1) {                                   // 64-bit size
+        if (bytesRead < 16) break
+        boxSize = Number(head.readBigUInt64BE(8))
+        headerLen = 16
+      } else if (boxSize === 0) {
+        boxSize = size - pos                                 // runs to end of file
+      }
+      if (boxSize < headerLen) return false
+      if (type === 'moov') return sawMdat
+      if (type === 'mdat') sawMdat = true
+      pos += boxSize
+    }
+    return false
+  } catch { return false } finally { await fh?.close() }
+}
+
+/**
+ * Move the index to the front. This is a remux — streams are copied, not
+ * re-encoded — so it is fast and lossless.
+ */
+export async function remuxFaststart(file) {
+  const out = `${file}.fs${extname(file)}`
+  await bin(FFMPEG, ['-y', '-i', file, '-c', 'copy', '-map', '0',
+    '-movflags', '+faststart', out], { timeout: 20 * 60_000 })
+  return out
 }
 
 // ---------- probe ----------
