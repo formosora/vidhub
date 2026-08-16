@@ -32,14 +32,32 @@ CREATE TABLE IF NOT EXISTS users (
 CREATE TABLE IF NOT EXISTS sessions (
   token   TEXT PRIMARY KEY,
   user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  exp     INTEGER NOT NULL
+  exp     INTEGER NOT NULL,
+  born    INTEGER NOT NULL DEFAULT 0,   -- first issued; caps how long sliding can extend
+  seen    INTEGER NOT NULL DEFAULT 0    -- last activity
 );
 CREATE TABLE IF NOT EXISTS api_keys (
   key     TEXT PRIMARY KEY,
   user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   name    TEXT NOT NULL DEFAULT '',
   status  TEXT NOT NULL DEFAULT 'active',
+  scopes  TEXT NOT NULL DEFAULT 'read,upload,manage',  -- comma separated
+  expires INTEGER NOT NULL DEFAULT 0,   -- epoch ms, 0 = never
+  last_used INTEGER NOT NULL DEFAULT 0,
   created TEXT NOT NULL
+);
+-- Resumable uploads in progress. Bytes live in DATA_DIR/tmp/.part-<id>.
+CREATE TABLE IF NOT EXISTS uploads (
+  id        TEXT PRIMARY KEY,
+  user_id   INTEGER NOT NULL DEFAULT 0,
+  username  TEXT NOT NULL DEFAULT '',
+  orig      TEXT NOT NULL DEFAULT '',
+  size      INTEGER NOT NULL DEFAULT 0,   -- declared total
+  received  INTEGER NOT NULL DEFAULT 0,   -- bytes on disk
+  visibility TEXT NOT NULL DEFAULT 'public',
+  ip        TEXT NOT NULL DEFAULT '',
+  created   INTEGER NOT NULL DEFAULT 0,
+  updated   INTEGER NOT NULL DEFAULT 0
 );
 CREATE TABLE IF NOT EXISTS videos (
   name      TEXT PRIMARY KEY,          -- <sha16>.<ext>, the permanent public URL key
@@ -107,6 +125,11 @@ for (const [table, column, decl] of [
   ['videos', 'stored', "TEXT NOT NULL DEFAULT ''"],
   ['videos', 'visibility', "TEXT NOT NULL DEFAULT 'public'"],   // public | private
   ['users', 'default_visibility', "TEXT NOT NULL DEFAULT 'public'"],
+  ['sessions', 'born', 'INTEGER NOT NULL DEFAULT 0'],
+  ['sessions', 'seen', 'INTEGER NOT NULL DEFAULT 0'],
+  ['api_keys', 'scopes', "TEXT NOT NULL DEFAULT 'read,upload,manage'"],
+  ['api_keys', 'expires', 'INTEGER NOT NULL DEFAULT 0'],
+  ['api_keys', 'last_used', 'INTEGER NOT NULL DEFAULT 0'],
 ]) {
   const cols = db.prepare(`PRAGMA table_info(${table})`).all().map(c => c.name)
   if (!cols.includes(column)) {

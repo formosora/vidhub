@@ -92,7 +92,11 @@ docker run -d --name vidhub -p 8081:8080 \
 | `DELETE /api/recycle` | 清空回收站 —— 自己的，管理员加 `all=1` 清全站 |
 | `GET/PATCH /api/me` | 读取 / 修改个人偏好（默认可见性） |
 | `POST /api/me/password` | 修改自己的密码（会踢掉全部会话） |
-| `GET/POST /api/me/keys` · `DELETE /api/me/keys/<key>` | API Key 管理 |
+| `GET/POST /api/me/keys` · `PATCH/DELETE /api/me/keys/<key>` | API Key 管理（仅限会话） |
+| `POST /api/uploads` | 开始断点续传 → `{id, offset, chunk_size}` |
+| `GET /api/uploads/<id>` | 查询服务端已收到多少字节，用于续传 |
+| `PATCH /api/uploads/<id>?offset=N` | 在指定偏移追加一个分片 |
+| `POST /api/uploads/<id>/finish` · `DELETE /api/uploads/<id>` | 完成 / 放弃 |
 | `GET /api/stats` | 管理员看全站，上传员看自己，匿名需开启 `stats_public` |
 
 **管理员**
@@ -145,7 +149,7 @@ DATA_DIR=/tmp/vh-test PORT=8098 ADMIN_PASSWORD=TestPass123 node server/server.js
 BASE=http://localhost:8098 ADMIN_PASSWORD=TestPass123 bash test/smoke.sh
 ```
 
-`test/smoke.sh`（112 条断言，不需要 ffmpeg）——注册开关与验证码、可见性与广场过滤、
+`test/smoke.sh`（144 条断言，不需要 ffmpeg）——注册开关与验证码、可见性与广场过滤、
 分享链接格式、双语 API、上传内容不可执行、最后一个管理员不可锁死、公开接口不泄露
 IP、设置项越界钳制、隔离内容不可重传、配额与防盗链、越权边界、Range/路径穿越。
 
@@ -226,3 +230,42 @@ node --test test/captcha.test.mjs
 
 账号可在「我的 → 账号」设默认值，上传时也能临时改；管理员可在「设置 → 注册」
 设定新账号的默认值，并在视频列表里改任意文件的可见性。
+
+## 🔑 API Key
+
+Key 携带显式的权限范围，而不是直接继承账号的全部能力：
+
+| 范围 | 能做什么 |
+| --- | --- |
+| `read` | 列出、查看自己的文件 |
+| `upload` | 新增文件 —— 不能读也不能删 |
+| `manage` | 改可见性、删除、清空回收站 |
+
+可选的过期时间限制泄露后的窗口，`last_used` 用于判断 Key 是否还在用，
+吊销不必删除。
+
+> API Key **永远无法**访问管理后台、创建其他 Key、或修改账号密码 ——
+> 即使持有者是管理员。这些操作必须是登录会话，所以泄露的 Key 无法自我扩权。
+
+## ⏱ 会话
+
+会话会滑动续期：过半后只要有活动就把过期时间推后，白天连续工作的人不会
+被中途踢出，而闲置的会话仍按时失效。`session_max_days` 是从首次登录起算的
+硬上限，任何会话都不会永生。勾选「记住我」把 `session_hours` 换成
+`session_remember_days`。
+
+## ⏸ 断点续传
+
+≥16MB 的文件走续传会话而不是一个长 POST —— 后者在 90% 处断掉就得从头再来。
+客户端向服务端询问已收到多少字节，然后从那里继续：断线、刷新页面、换个标签页
+都能接上。
+
+```
+POST   /api/uploads              {name, size}      -> {id, offset, chunk_size}
+GET    /api/uploads/<id>                           -> {offset, size}
+PATCH  /api/uploads/<id>?offset=N  <二进制分片>     -> {offset}
+POST   /api/uploads/<id>/finish                    -> 与普通上传相同的返回
+```
+
+偏移量以服务端为准。分片起点若与当前偏移不符会被拒绝，并附上真实偏移，
+让客户端重新对齐而不是写坏文件。无人续传的会话 24 小时后清理。

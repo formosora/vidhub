@@ -102,6 +102,67 @@ ck "quota msg zh" "该 IP 超过每日上传上限" "$(curl -s -X PUT $B/api/adm
 ck "quota msg en" "daily upload limit" "$(curl -s -H 'Accept-Language: en-US' -X POST "$B/api/videos?name=qz.mp4" "${A[@]}" --data-binary @qz.mp4)"
 curl -s -X PUT $B/api/admin/settings "${A[@]}" -H 'Content-Type: application/json' -d '{"daily_limit_ip":0}' -o/dev/null
 
+echo "== API key scopes =="
+mkkey() { curl -s -X POST $B/api/me/keys "${A[@]}" -H 'Content-Type: application/json' -d "$1" | sed 's/.*"key":"\([^"]*\)".*/\1/'; }
+KRO=$(mkkey '{"name":"ro","scopes":["read"]}')
+KUP=$(mkkey '{"name":"up","scopes":["upload"]}')
+KFULL=$(mkkey '{"name":"full","scopes":["read","upload","manage"]}')
+head -c 9000 /dev/urandom > k.mp4
+ck "read key can list"        "200" "$(curl -s -o/dev/null -w '%{http_code}' "$B/api/videos" -H "Authorization: Bearer $KRO")"
+ck "read key cannot upload"   "403" "$(curl -s -o/dev/null -w '%{http_code}' -X POST "$B/api/videos?name=k.mp4" -H "Authorization: Bearer $KRO" --data-binary @k.mp4)"
+ck "upload key can upload"    "200" "$(curl -s -o/dev/null -w '%{http_code}' -X POST "$B/api/videos?name=k.mp4" -H "Authorization: Bearer $KUP" --data-binary @k.mp4)"
+ck "upload key cannot list"   "403" "$(curl -s -o/dev/null -w '%{http_code}' "$B/api/videos" -H "Authorization: Bearer $KUP")"
+ck "scope error is explicit"  "key.scopeMissing" "$(curl -s "$B/api/videos" -H "Authorization: Bearer $KUP")"
+ck "no key reaches admin"     "403" "$(curl -s -o/dev/null -w '%{http_code}' $B/api/admin/settings -H "Authorization: Bearer $KFULL")"
+ck "no key mints keys"        "403" "$(curl -s -o/dev/null -w '%{http_code}' -X POST $B/api/me/keys -H "Authorization: Bearer $KFULL" -H 'Content-Type: application/json' -d '{"scopes":["manage"]}')"
+ck "no key lists keys"        "403" "$(curl -s -o/dev/null -w '%{http_code}' $B/api/me/keys -H "Authorization: Bearer $KFULL")"
+ck "no key changes password"  "403" "$(curl -s -o/dev/null -w '%{http_code}' -X POST $B/api/me/password -H "Authorization: Bearer $KFULL" -H 'Content-Type: application/json' -d '{"old":"x","password":"yyyyyy"}')"
+ck "scopes must be non-empty" "key.noScopes" "$(curl -s -X POST $B/api/me/keys "${A[@]}" -H 'Content-Type: application/json' -d '{"scopes":[]}')"
+ck "revoke works"             "401" "$(curl -s -X PATCH $B/api/me/keys/$KRO "${A[@]}" -H 'Content-Type: application/json' -d '{"status":"disabled"}' -o/dev/null; curl -s -o/dev/null -w '%{http_code}' $B/api/me -H "Authorization: Bearer $KRO")"
+ck "re-enable works"          "200" "$(curl -s -X PATCH $B/api/me/keys/$KRO "${A[@]}" -H 'Content-Type: application/json' -d '{"status":"active"}' -o/dev/null; curl -s -o/dev/null -w '%{http_code}' $B/api/me -H "Authorization: Bearer $KRO")"
+ck "listing reports scopes"   '"scopes":"read"' "$(curl -s $B/api/me/keys "${A[@]}")"
+
+echo "== sessions =="
+ck "login returns a token"    "64" "$(curl -s -X POST $B/api/login -H 'Content-Type: application/json' -d "{\"username\":\"admin\",\"password\":\"$PW\"}" | sed 's/.*"token":"\([^"]*\)".*/\1/' | tr -d '\n' | wc -c)"
+RT=$(curl -s -X POST $B/api/login -H 'Content-Type: application/json' -d "{\"username\":\"admin\",\"password\":\"$PW\",\"remember\":true}" | sed 's/.*"token":"\([^"]*\)".*/\1/')
+ck "remember-me session works" "200" "$(curl -s -o/dev/null -w '%{http_code}' $B/api/me -H "Authorization: Bearer $RT")"
+
+echo "== resumable uploads =="
+head -c 3000000 /dev/urandom > big.bin
+mv big.bin big.mp4
+TOTAL=$(node -e "console.log(require('fs').statSync('big.mp4').size)")
+CREATE=$(curl -s -X POST $B/api/uploads "${A[@]}" -H 'Content-Type: application/json' -d "{\"name\":\"big.mp4\",\"size\":$TOTAL}")
+UPID=$(echo "$CREATE" | sed 's/.*"id":"\([^"]*\)".*/\1/')
+ck "session created"          '"offset":0' "$CREATE"
+ck "session reports chunk size" '"chunk_size"' "$CREATE"
+node -e "
+const fs=require('fs'); const b=fs.readFileSync('big.mp4');
+fs.writeFileSync('p1.bin', b.subarray(0, 1000000));
+fs.writeFileSync('p2.bin', b.subarray(1000000));
+"
+ck "first chunk accepted"     '"offset":1000000' "$(curl -s -X PATCH "$B/api/uploads/$UPID?offset=0" "${A[@]}" --data-binary @p1.bin)"
+ck "progress is queryable"    '"offset":1000000' "$(curl -s "$B/api/uploads/$UPID" "${A[@]}")"
+ck "wrong offset refused"     "offset mismatch" "$(curl -s -X PATCH "$B/api/uploads/$UPID?offset=42" "${A[@]}" --data-binary @p2.bin)"
+ck "mismatch reveals truth"   '"offset":1000000' "$(curl -s -X PATCH "$B/api/uploads/$UPID?offset=42" "${A[@]}" --data-binary @p2.bin)"
+ck "early finish refused"     "incomplete" "$(curl -s -X POST "$B/api/uploads/$UPID/finish" "${A[@]}")"
+ck "resume from real offset"  "\"offset\":$TOTAL" "$(curl -s -X PATCH "$B/api/uploads/$UPID?offset=1000000" "${A[@]}" --data-binary @p2.bin)"
+FIN=$(curl -s -X POST "$B/api/uploads/$UPID/finish" "${A[@]}")
+ck "finish succeeds"          '"orig":"big.mp4"' "$FIN"
+NRES=$(echo "$FIN" | sed 's/.*"name":"\([^"]*\)".*/\1/')
+ck "assembled bytes intact"   "OK" "$(node -e "
+const { execFileSync } = require('child_process');
+const crypto = require('crypto'), fs = require('fs');
+const local = crypto.createHash('sha256').update(fs.readFileSync('big.mp4')).digest('hex');
+console.log(process.argv[1].startsWith(local.slice(0,16)) ? 'OK' : 'HASH MISMATCH ' + local.slice(0,16) + ' vs ' + process.argv[1]);
+" "$NRES")"
+ck "session is gone after finish" "404" "$(curl -s -o/dev/null -w '%{http_code}' "$B/api/uploads/$UPID" "${A[@]}")"
+ck "anonymous cannot create"  "401" "$(curl -s -o/dev/null -w '%{http_code}' -X POST $B/api/uploads -H 'Content-Type: application/json' -d '{"name":"a.mp4","size":10}')"
+ck "bad type refused"         "up.badType" "$(curl -s -X POST $B/api/uploads "${A[@]}" -H 'Content-Type: application/json' -d '{"name":"a.exe","size":10}')"
+ck "oversize refused"         "up.tooLarge" "$(curl -s -X POST $B/api/uploads "${A[@]}" -H 'Content-Type: application/json' -d '{"name":"a.mp4","size":999999999999}')"
+OTHER=$(curl -s -X POST $B/api/uploads "${A[@]}" -H 'Content-Type: application/json' -d '{"name":"o.mp4","size":100}' | sed 's/.*"id":"\([^"]*\)".*/\1/')
+ck "another user cannot peek" "404" "$(curl -s -o/dev/null -w '%{http_code}' "$B/api/uploads/$OTHER" "${NT[@]}")"
+ck "abort removes it"         "404" "$(curl -s -X DELETE "$B/api/uploads/$OTHER" "${A[@]}" -o/dev/null; curl -s -o/dev/null -w '%{http_code}' "$B/api/uploads/$OTHER" "${A[@]}")"
+
 echo "== UTF-8 across chunk boundaries =="
 # A multi-byte payload far larger than one socket chunk. Decoding each chunk
 # separately corrupts every character that straddles a boundary.
@@ -174,11 +235,14 @@ echo "== P0-2  last admin cannot be locked out =="
 ck "self demote blocked"  "最后一个管理员" "$(curl -s -X PATCH $B/api/admin/users/1 "${A[@]}" -H 'Content-Type: application/json' -d '{"role":"uploader"}')"
 ck "self disable blocked" "最后一个管理员" "$(curl -s -X PATCH $B/api/admin/users/1 "${A[@]}" -H 'Content-Type: application/json' -d '{"status":"disabled"}')"
 ck "still admin"          "200" "$(curl -s -o/dev/null -w '%{http_code}' $B/api/admin/settings "${A[@]}")"
-curl -s -X POST $B/api/admin/users "${A[@]}" -H 'Content-Type: application/json' -d '{"username":"admin2","password":"adminpass","role":"admin"}' -o/dev/null
+# Take the id from the create response — hard-coding it broke as soon as an
+# earlier block started creating users of its own.
+ADMIN2_ID=$(curl -s -X POST $B/api/admin/users "${A[@]}" -H 'Content-Type: application/json' -d '{"username":"admin2","password":"adminpass","role":"admin"}' | sed 's/.*"id":\([0-9]*\).*/\1/')
 ck "with 2 admins demote ok" '{"ok":true}' "$(curl -s -X PATCH $B/api/admin/users/1 "${A[@]}" -H 'Content-Type: application/json' -d '{"role":"uploader"}')"
 A2=(-H "Authorization: Bearer $(curl -s -X POST $B/api/login -H 'Content-Type: application/json' -d '{"username":"admin2","password":"adminpass"}' | sed 's/.*"token":"\([^"]*\)".*/\1/')")
 curl -s -X PATCH $B/api/admin/users/1 "${A2[@]}" -H 'Content-Type: application/json' -d '{"role":"admin"}' -o/dev/null
-curl -s -X DELETE $B/api/admin/users/2 "${A[@]}" -o/dev/null
+curl -s -X DELETE "$B/api/admin/users/$ADMIN2_ID" "${A[@]}" -o/dev/null
+ck "cleanup left one admin" "1" "$(curl -s $B/api/admin/users "${A[@]}" | grep -o '\"role\":\"admin\"' | wc -l | tr -d ' ')"
 
 echo "== P1  public API leaks nothing sensitive =="
 head -c 120000 /dev/urandom > a.mp4
@@ -238,7 +302,7 @@ ck "quota enforced" "站点存储已达上限" "$(curl -s -X POST "$B/api/videos
 curl -s -X PUT $B/api/admin/settings "${A[@]}" -H 'Content-Type: application/json' -d '{"storage_quota_gb":0}' -o/dev/null
 
 echo "== authorization boundaries (must still hold) =="
-curl -s -X POST $B/api/admin/users "${A[@]}" -H 'Content-Type: application/json' -d '{"username":"bob","password":"bobpass1","role":"uploader"}' -o/dev/null
+BOB_ID=$(curl -s -X POST $B/api/admin/users "${A[@]}" -H 'Content-Type: application/json' -d '{"username":"bob","password":"bobpass1","role":"uploader"}' | sed 's/.*"id":\([0-9]*\).*/\1/')
 BT=(-H "Authorization: Bearer $(curl -s -X POST $B/api/login -H 'Content-Type: application/json' -d '{"username":"bob","password":"bobpass1"}' | sed 's/.*"token":"\([^"]*\)".*/\1/')")
 ck "uploader blocked from admin"    "403" "$(curl -s -o/dev/null -w '%{http_code}' $B/api/admin/settings "${BT[@]}")"
 ck "uploader blocked from users"    "403" "$(curl -s -o/dev/null -w '%{http_code}' $B/api/admin/users "${BT[@]}")"
@@ -247,7 +311,7 @@ ck "cannot delete other's video"    "403" "$(curl -s -o/dev/null -w '%{http_code
 ck "cannot ban"                     "403" "$(curl -s -o/dev/null -w '%{http_code}' -X POST "$B/api/videos/$NC/ban" "${BT[@]}")"
 ck "duplicate username rejected"    "已存在" "$(curl -s -X POST $B/api/admin/users "${A[@]}" -H 'Content-Type: application/json' -d '{"username":"bob","password":"bobpass1"}')"
 ck "short password rejected"        "至少 6 位" "$(curl -s -X POST $B/api/admin/users "${A[@]}" -H 'Content-Type: application/json' -d '{"username":"eve","password":"1"}')"
-ck "admin reset to weak pw blocked" "至少 6 位" "$(curl -s -X PATCH $B/api/admin/users/3 "${A[@]}" -H 'Content-Type: application/json' -d '{"password":"1"}')"
+ck "admin reset to weak pw blocked" "至少 6 位" "$(curl -s -X PATCH "$B/api/admin/users/$BOB_ID" "${A[@]}" -H 'Content-Type: application/json' -d '{"password":"1"}')"
 
 echo "== path / header hygiene =="
 ck "encoded traversal blocked" "403" "$(curl -s -o/dev/null -w '%{http_code}' --path-as-is "$B/%2e%2e%2fserver.js")"

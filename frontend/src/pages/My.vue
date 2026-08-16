@@ -89,19 +89,40 @@ async function setDefaultVisibility(vis: Visibility) {
 watch(locale, () => { if (tab.value === 'videos' || tab.value === 'recycle') load() })
 
 // api keys
-interface ApiKey { key: string; name: string; status: string; created: string }
+interface ApiKey {
+  key: string; name: string; status: string; created: string
+  scopes: string; expires: number; last_used: number; expired: boolean
+}
 const keys = ref<ApiKey[]>([])
 const keyName = ref('')
+const keyScopes = ref<string[]>(['read', 'upload'])
+const keyDays = ref(0)
+
 async function loadKeys() { keys.value = await (await api('/api/me/keys')).json() }
 async function addKey() {
-  const res = await api('/api/me/keys', { method: 'POST', body: JSON.stringify({ name: keyName.value }) })
+  if (!keyScopes.value.length) return toast(t('my.keyNeedScope'), false)
+  const res = await api('/api/me/keys', {
+    method: 'POST',
+    body: JSON.stringify({ name: keyName.value, scopes: keyScopes.value, expires_days: keyDays.value }),
+  })
   if (res.ok) { keyName.value = ''; loadKeys(); toast(t('my.keyCreated')) }
+  else toast((await res.json().catch(() => ({}))).error || t('c.failed'), false)
 }
 async function delKey(k: ApiKey) {
   if (!confirm(t('my.keyConfirmDelete', k.name || k.key.slice(0, 12) + '…'))) return
   await api(`/api/me/keys/${k.key}`, { method: 'DELETE' })
   loadKeys()
 }
+async function toggleKey(k: ApiKey) {
+  const status = k.status === 'active' ? 'disabled' : 'active'
+  const res = await api(`/api/me/keys/${k.key}`, { method: 'PATCH', body: JSON.stringify({ status }) })
+  if (res.ok) { loadKeys(); toast(t('c.ok')) } else toast(t('c.failed'), false)
+}
+
+const SCOPE_KEYS = ['read', 'upload', 'manage'] as const
+const fmtDate = (ms: number) => (ms ? new Date(ms).toISOString().slice(0, 10) : '')
+const keyState = (k: ApiKey) =>
+  k.status !== 'active' ? t('my.keyRevoked') : k.expired ? t('my.keyExpired') : t('ad.active')
 
 // password
 const oldPwd = ref(''), newPwd = ref(''), newPwd2 = ref('')
@@ -198,17 +219,54 @@ onMounted(async () => {
     <template v-if="tab === 'keys'">
       <div class="glass-card" style="padding:1.2rem">
         <h3 style="margin-top:0">{{ t('my.tabKeys') }} <span class="muted2">— {{ t('my.keysDesc') }}</span></h3>
-        <div class="row" style="margin-bottom:1rem">
-          <input v-model="keyName" :placeholder="t('my.keyName')" style="background:rgba(0,0,0,.28);border:1px solid var(--glass-border);color:var(--text);border-radius:10px;padding:.5rem .8rem;outline:none;flex:1" />
-          <button class="btn sm" @click="addKey">{{ t('c.create') }}</button>
-        </div>
-        <div v-for="k in keys" :key="k.key" class="row" style="padding:.5rem 0;border-bottom:1px solid rgba(255,255,255,.05)">
-          <div class="grow">
-            <div>{{ k.name || t('my.unnamed') }} <span class="muted2">{{ k.created.slice(0, 10) }}</span></div>
-            <div class="mono muted2">{{ k.key }}</div>
+
+        <div class="key-new">
+          <div class="row" style="margin-bottom:.7rem">
+            <input v-model="keyName" :placeholder="t('my.keyName')" style="background:rgba(0,0,0,.28);border:1px solid var(--glass-border);color:var(--text);border-radius:10px;padding:.5rem .8rem;outline:none;flex:1" />
           </div>
-          <button class="btn ghost sm" @click="copy(k.key)">{{ t('c.copy') }}</button>
-          <button class="btn danger sm" @click="delKey(k)">{{ t('c.delete') }}</button>
+          <div class="field">
+            <label>{{ t('my.keyScopes') }}</label>
+            <div class="scope-row">
+              <label v-for="s in SCOPE_KEYS" :key="s" class="scope-opt" :class="{ on: keyScopes.includes(s) }">
+                <input type="checkbox" :value="s" v-model="keyScopes" />
+                <b>{{ t('scope.' + s) }}</b><small>{{ t('scope.' + s + 'Hint') }}</small>
+              </label>
+            </div>
+          </div>
+          <div class="row" style="align-items:flex-end">
+            <div class="field" style="width:230px;margin:0">
+              <label>{{ t('my.keyExpiry') }}</label>
+              <select v-model.number="keyDays">
+                <option :value="0">{{ t('my.keyNoExpiry') }}</option>
+                <option :value="30">30 {{ t('my.days') }}</option>
+                <option :value="90">90 {{ t('my.days') }}</option>
+                <option :value="365">365 {{ t('my.days') }}</option>
+              </select>
+            </div>
+            <button class="btn sm" @click="addKey">{{ t('c.create') }}</button>
+          </div>
+          <p class="hint">{{ t('my.keyAdminNote') }}</p>
+        </div>
+
+        <div v-for="k in keys" :key="k.key" class="key-row">
+          <div class="grow" style="min-width:0">
+            <div>
+              {{ k.name || t('my.unnamed') }}
+              <span class="pill" :class="k.status === 'active' && !k.expired ? 'ok' : 'banned'">{{ keyState(k) }}</span>
+              <span v-for="s in k.scopes.split(',')" :key="s" class="pill scope-pill">{{ t('scope.' + s) }}</span>
+            </div>
+            <div class="mono muted2" style="overflow:hidden;text-overflow:ellipsis">{{ k.key }}</div>
+            <div class="muted2" style="font-size:.72rem">
+              {{ t('my.keyCreatedOn', k.created.slice(0, 10)) }}
+              · {{ k.expires ? t('my.keyExpiresOn', fmtDate(k.expires)) : t('my.keyNoExpiry') }}
+              · {{ k.last_used ? t('my.keyLastUsed', fmtDate(k.last_used)) : t('my.keyNeverUsed') }}
+            </div>
+          </div>
+          <div class="ops">
+            <button class="btn ghost sm" @click="copy(k.key)">{{ t('c.copy') }}</button>
+            <button class="btn ghost sm" @click="toggleKey(k)">{{ k.status === 'active' ? t('my.keyRevoke') : t('ad.enable') }}</button>
+            <button class="btn danger sm" @click="delKey(k)">{{ t('c.delete') }}</button>
+          </div>
         </div>
         <p v-if="keys.length === 0" class="muted">{{ t('my.noKeys') }}</p>
       </div>
@@ -275,4 +333,42 @@ onMounted(async () => {
 .vis-btn.on { border-color: var(--accent, #7c5cff); background: rgba(124, 92, 255, .12); }
 .vis-btn small { color: var(--muted); font-size: .74rem; line-height: 1.35; }
 .vis-btn:disabled { opacity: .6; cursor: default; }
+
+.key-new {
+  padding: 1rem;
+  margin-bottom: 1rem;
+  border: 1px solid var(--glass-border);
+  border-radius: 12px;
+  background: rgba(0, 0, 0, .18);
+}
+.scope-row { display: flex; flex-wrap: wrap; gap: .6rem; }
+.scope-opt {
+  flex: 1 1 180px;
+  display: flex;
+  flex-direction: column;
+  gap: .1rem;
+  padding: .5rem .7rem;
+  border: 1px solid var(--glass-border);
+  border-radius: 10px;
+  cursor: pointer;
+  transition: border-color .18s, background .18s;
+}
+.scope-opt.on { border-color: var(--accent, #7c5cff); background: rgba(124, 92, 255, .1); }
+.scope-opt input { display: none; }
+.scope-opt b { font-size: .85rem; }
+.scope-opt small { color: var(--muted); font-size: .72rem; line-height: 1.35; }
+
+.key-row {
+  display: flex;
+  align-items: center;
+  gap: .6rem;
+  padding: .6rem 0;
+  border-bottom: 1px solid rgba(255, 255, 255, .05);
+}
+.key-row .ops { display: flex; gap: .3rem; flex: 0 0 auto; }
+.scope-pill { background: rgba(124, 92, 255, .16); color: #c4b5fd; font-size: .68rem; }
+@media (max-width: 640px) {
+  .key-row { flex-wrap: wrap; }
+  .key-row .ops { width: 100%; }
+}
 </style>

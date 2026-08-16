@@ -11,6 +11,7 @@ import { q } from './lib/db.js'
 import { ensureAdmin } from './lib/auth.js'
 import { handleApi } from './lib/routes.js'
 import { findFile, thumbPath, resumeJobs } from './lib/upload.js'
+import { sweepUploads } from './lib/resumable.js'
 import { playerPage } from './lib/player.js'
 import { leechBlocked } from './lib/security.js'
 import { send, clientIp } from './lib/util.js'
@@ -62,6 +63,7 @@ ensureAdmin()
 hasFfmpeg().then(ok => {
   console.log(`[vidhub] ffmpeg: ${ok ? 'available' : 'MISSING — degraded mode'}`)
   resumeJobs()      // re-queue anything left mid-pipeline by a restart
+  sweepUploads()    // and drop resumable sessions nobody came back to
 })
 
 /** RFC 7233 single-range streaming — required for seeking in <video>. */

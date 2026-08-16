@@ -27,6 +27,12 @@ const M = {
   'reg.captchaWrong':      ['验证码错误或已过期', 'The verification answer is wrong or expired'],
   'captcha.throttled':     ['请求过于频繁，请稍后再试', 'Too many requests — please try again later'],
 
+  // ---- api keys ----
+  'key.sessionOnly':       ['该操作需登录后进行，API Key 不可用', 'This action needs a signed-in session; an API key cannot do it'],
+  'key.scopeMissing':      ['该 API Key 没有此操作的权限', 'This API key does not carry the scope for that'],
+  'key.noScopes':          ['至少选择一项权限', 'Pick at least one scope'],
+  'key.badStatus':         ['状态取值无效', 'Invalid status'],
+
   // ---- users (admin) ----
   'user.notFound':         ['用户不存在', 'No such user'],
   'user.lastAdminLocked':  ['这是最后一个管理员，不能降权或禁用', 'This is the last administrator — cannot demote or disable'],

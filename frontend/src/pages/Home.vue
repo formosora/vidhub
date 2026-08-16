@@ -4,12 +4,17 @@ import { toast } from '../toast'
 import { getToken, state, fmtSize, type Visibility } from '../api'
 import { langHeader, t } from '../i18n'
 import { LINK_FORMATS, linkFor, type LinkFormat } from '../links'
+import { RESUMABLE_FROM, uploadFile } from '../upload'
 
 interface Uploaded {
   name: string; orig: string; size: number; kind?: string; status: string
   url: string; player: string; embed: string; thumb: string
 }
-interface UpTask { file: File; progress: number; done: boolean; err: string }
+interface UpTask {
+  file: File; progress: number; done: boolean; err: string
+  resumed: number          // bytes the server already had when we reconnected
+  resumable: boolean
+}
 
 const dragOver = ref(false)
 const fileInput = ref<HTMLInputElement>()
@@ -33,25 +38,18 @@ const accept = computed(() => {
 const tabs = LINK_FORMATS
 
 async function uploadOne(task: UpTask) {
-  const token = getToken()
-  return new Promise<void>(resolve => {
-    const xhr = new XMLHttpRequest()
-    xhr.open('POST', `/api/videos?name=${encodeURIComponent(task.file.name)}&visibility=${visibility.value}`)
-    if (token) xhr.setRequestHeader('Authorization', `Bearer ${token}`)
-    for (const [k, v] of Object.entries(langHeader())) xhr.setRequestHeader(k, v)
-    xhr.upload.onprogress = e => { if (e.lengthComputable) task.progress = Math.round((e.loaded / e.total) * 100) }
-    xhr.onload = () => {
-      task.done = true
-      try {
-        const j = JSON.parse(xhr.responseText)
-        if (xhr.status === 200) { results.value.unshift(j); if (j.status === 'processing') pollUntilDone(j) }
-        else task.err = j.error || t('home.uploadFailed')
-      } catch { task.err = t('home.uploadFailed') }
-      resolve()
-    }
-    xhr.onerror = () => { task.done = true; task.err = t('home.netError'); resolve() }
-    xhr.send(task.file)
-  })
+  try {
+    const j = await uploadFile(task.file, visibility.value, {
+      onProgress: (sent, total) => { task.progress = Math.round((sent / total) * 100) },
+      onResume: from => { task.resumed = from },
+    })
+    task.done = true
+    results.value.unshift(j)
+    if (j.status === 'processing') pollUntilDone(j)
+  } catch (e) {
+    task.done = true
+    task.err = (e as Error).message || t('home.uploadFailed')
+  }
 }
 
 async function pollUntilDone(u: Uploaded) {
@@ -82,7 +80,10 @@ async function pick(files: FileList | null | undefined) {
   const list = [...files].slice(0, max)
   if (files.length > max) toast(t('home.maxFiles', max), false)
   for (const f of list) {
-    const task: UpTask = { file: f, progress: 0, done: false, err: '' }
+    const task: UpTask = {
+      file: f, progress: 0, done: false, err: '',
+      resumed: 0, resumable: f.size >= RESUMABLE_FROM,
+    }
     tasks.value.push(task)
     await uploadOne(task)
   }
@@ -138,13 +139,19 @@ const copyAll = async () => {
     </div>
 
     <div v-if="tasks.length" class="glass-card" style="padding:.8rem 1.2rem;margin-top:1rem">
-      <div v-for="t in tasks" :key="t.file.name + t.file.size" class="up-item">
-        <span style="min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ t.file.name }}</span>
-        <span class="muted2">{{ fmtSize(t.file.size) }}</span>
-        <div class="bar"><i :style="{ width: t.progress + '%' }" /></div>
-        <b v-if="t.err" style="color:var(--red)">{{ t.err }}</b>
-        <b v-else-if="t.done" style="color:var(--green)">✓</b>
-        <b v-else>{{ t.progress }}%</b>
+      <div v-for="task in tasks" :key="task.file.name + task.file.size" class="up-item">
+        <span style="min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">
+          {{ task.file.name }}
+          <span v-if="task.resumable" class="pill scope-pill" :title="t('home.resumableHint')">⇄</span>
+        </span>
+        <span class="muted2">
+          {{ fmtSize(task.file.size) }}
+          <template v-if="task.resumed"> · {{ t('home.resumedFrom', fmtSize(task.resumed)) }}</template>
+        </span>
+        <div class="bar"><i :style="{ width: task.progress + '%' }" /></div>
+        <b v-if="task.err" style="color:var(--red)">{{ task.err }}</b>
+        <b v-else-if="task.done" style="color:var(--green)">✓</b>
+        <b v-else>{{ task.progress }}%</b>
       </div>
     </div>
 

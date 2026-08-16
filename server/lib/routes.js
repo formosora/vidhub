@@ -6,13 +6,16 @@ import { conf, confNum, confAll, setConf, publicConf } from './config.js'
 import {
   identify, verifyUser, createUser, openSession, closeSession,
   loginThrottled, registerThrottled, noteRegistered, captchaThrottled,
-  isAdmin, hashPassword, assertPassword,
+  isAdmin, isAdminSession, hasScope, SCOPES, parseScopes, hashPassword, assertPassword,
 } from './auth.js'
 import { issueCaptcha, verifyCaptcha } from './captcha.js'
 import {
   ipBlockReason, quotaReason, logUpload, locateIp, storageReason,
 } from './security.js'
 import { acceptUpload, findFile, thumbPath } from './upload.js'
+import {
+  createUpload, getUpload, appendChunk, finishUpload, abortUpload, CHUNK_SIZE,
+} from './resumable.js'
 import { hasFfmpeg } from './media.js'
 import { send, readJson, clientIp, today, newToken, nowIso } from './util.js'
 import { t, lang, AppError } from './i18n.js'
@@ -64,7 +67,7 @@ export async function handleApi(req, res, path, url) {
     const body = await readJson(req)
     const u = verifyUser(body.username ?? 'admin', body.password)
     if (!u) return fail(401, 'auth.badCredentials')
-    return send(res, 200, { token: openSession(u.id), username: u.username, role: u.role })
+    return send(res, 200, { token: openSession(u.id, !!body.remember), username: u.username, role: u.role })
   }
   if (path === '/api/captcha' && req.method === 'GET') {
     if (captchaThrottled(ip)) return fail(429, 'captcha.throttled')
@@ -112,6 +115,7 @@ export async function handleApi(req, res, path, url) {
   }
   if (path === '/api/me/password' && req.method === 'POST') {
     if (!user) return fail(401, 'auth.unauthorized')
+    if (user.via === 'key') return fail(403, 'key.sessionOnly')
     const body = await readJson(req)
     const u = verifyUser(user.username, body.old)
     if (!u) return fail(403, 'auth.oldPasswordWrong')
@@ -163,6 +167,7 @@ export async function handleApi(req, res, path, url) {
   // ---------- upload ----------
   if (path === '/api/videos' && req.method === 'POST') {
     if (conf('must_login') && !user) return fail(401, 'up.loginRequired')
+    if (!hasScope(user, 'upload')) return fail(403, 'key.scopeMissing')
     if (!conf('must_login') && !conf('allow_guest') && !user) return fail(401, 'up.loginRequired')
     const blocked = ipBlockReason(ip)
     if (blocked) { logUpload({ ip, user, status: 'rejected', msg: blocked }); return fail(403, blocked) }
@@ -177,9 +182,52 @@ export async function handleApi(req, res, path, url) {
     return r.error ? fail(r.status, r.error) : send(res, r.status, r.body)
   }
 
+  // ---------- resumable uploads ----------
+  if (path === '/api/uploads' || path.startsWith('/api/uploads/')) {
+    if (conf('must_login') && !user) return fail(401, 'up.loginRequired')
+    if (!conf('must_login') && !conf('allow_guest') && !user) return fail(401, 'up.loginRequired')
+    if (!hasScope(user, 'upload')) return fail(403, 'key.scopeMissing')
+
+    if (path === '/api/uploads' && req.method === 'POST') {
+      const blocked = ipBlockReason(ip)
+      if (blocked) return fail(403, blocked)
+      const over = quotaReason(ip, user)
+      if (over) return fail(429, over)
+      const b = await readJson(req)
+      const r = createUpload({ user, ip, orig: b.name, size: b.size, visibility: asVisibility(b.visibility) })
+      return r.error ? fail(r.status, r.error) : send(res, r.status, r.body)
+    }
+
+    const um2 = path.match(/^\/api\/uploads\/([\w-]+)(\/finish)?$/)
+    if (um2) {
+      const [, id, finishing] = um2
+      const u = getUpload(id, user)
+      if (!u) return fail(404, 'c.notFound')
+
+      if (req.method === 'GET' && !finishing)
+        return send(res, 200, { id: u.id, offset: u.received, size: u.size, chunk_size: CHUNK_SIZE })
+
+      if (req.method === 'PATCH' && !finishing) {
+        const offset = Number(url.searchParams.get('offset') ?? u.received)
+        const r = await appendChunk(req, u, offset)
+        return send(res, r.status, r.body)
+      }
+
+      if (req.method === 'POST' && finishing) {
+        const region = await locateIp(ip)
+        const r = await finishUpload(u, { user, ip, region })
+        return r.error ? fail(r.status, r.error) : send(res, r.status, r.body)
+      }
+
+      if (req.method === 'DELETE' && !finishing) { abortUpload(u); return send(res, 200, { ok: true }) }
+    }
+    return fail(404, 'c.notFound')
+  }
+
   // ---------- my videos / management (owner or admin) ----------
   if (path === '/api/videos' && req.method === 'GET') {
     if (!user) return fail(401, 'auth.unauthorized')
+    if (!hasScope(user, 'read')) return fail(403, 'key.scopeMissing')
     const { size, off } = page(url)
     const kw = `%${(url.searchParams.get('q') || '').trim()}%`
     const showAll = isAdmin(user) && url.searchParams.get('all') === '1'
@@ -204,13 +252,15 @@ export async function handleApi(req, res, path, url) {
     if (!v) return fail(404, 'c.notFound')
     const own = v.user_id === user.id
     const mayManage = own || isAdmin(user)
+    const canWrite = mayManage && hasScope(user, 'manage')
 
     if (req.method === 'GET' && !action) {
       if (!mayManage) return fail(403, 'auth.forbidden')
+      if (!hasScope(user, 'read')) return fail(403, 'key.scopeMissing')
       return send(res, 200, videoOut(v))
     }
     if (req.method === 'PATCH' && !action) {            // visibility toggle
-      if (!mayManage) return fail(403, 'auth.forbidden')
+      if (!canWrite) return fail(403, mayManage ? 'key.scopeMissing' : 'auth.forbidden')
       const b = await readJson(req)
       const vis = asVisibility(b.visibility)
       if (!vis) return fail(400, 'c.badVisibility')
@@ -218,24 +268,24 @@ export async function handleApi(req, res, path, url) {
       return send(res, 200, { ok: true, visibility: vis })
     }
     if (req.method === 'DELETE' && !action) {           // soft delete → recycle bin
-      if (!mayManage) return fail(403, 'auth.forbidden')
+      if (!canWrite) return fail(403, mayManage ? 'key.scopeMissing' : 'auth.forbidden')
       q.run("UPDATE videos SET status='recycled' WHERE name=?", name)
       return send(res, 200, { ok: true })
     }
     if (req.method === 'POST' && action === 'restore') {
-      if (!mayManage) return fail(403, 'auth.forbidden')
+      if (!canWrite) return fail(403, mayManage ? 'key.scopeMissing' : 'auth.forbidden')
       q.run("UPDATE videos SET status='ok' WHERE name=?", name)
       return send(res, 200, { ok: true })
     }
     if (req.method === 'DELETE' && action === 'force') { // permanent
-      if (!mayManage) return fail(403, 'auth.forbidden')
+      if (!canWrite) return fail(403, mayManage ? 'key.scopeMissing' : 'auth.forbidden')
       const f = findFile(v); if (f) try { unlinkSync(f) } catch {}
       try { unlinkSync(thumbPath(name)) } catch {}
       q.run('DELETE FROM videos WHERE name=?', name)
       return send(res, 200, { ok: true })
     }
     if (req.method === 'POST' && (action === 'ban' || action === 'unban')) {
-      if (!isAdmin(user)) return fail(403, 'auth.forbidden')
+      if (!isAdminSession(user)) return fail(403, 'auth.forbidden')
       q.run('UPDATE videos SET status=? WHERE name=?', action === 'ban' ? 'banned' : 'ok', name)
       return send(res, 200, { ok: true })
     }
@@ -249,6 +299,7 @@ export async function handleApi(req, res, path, url) {
    */
   if (path === '/api/recycle' && req.method === 'GET') {
     if (!user) return fail(401, 'auth.unauthorized')
+    if (!hasScope(user, 'read')) return fail(403, 'key.scopeMissing')
     const { size, off } = page(url)
     const showAll = isAdmin(user) && url.searchParams.get('all') === '1'
     const conds = ["status = 'recycled'"], args = []
@@ -262,6 +313,7 @@ export async function handleApi(req, res, path, url) {
   /** Purge the bin — own by default, whole site for an admin passing all=1. */
   if (path === '/api/recycle' && req.method === 'DELETE') {
     if (!user) return fail(401, 'auth.unauthorized')
+    if (!hasScope(user, 'manage')) return fail(403, 'key.scopeMissing')
     const showAll = isAdmin(user) && url.searchParams.get('all') === '1'
     const rows = showAll
       ? q.all("SELECT name, stored FROM videos WHERE status = 'recycled'")
@@ -278,27 +330,45 @@ export async function handleApi(req, res, path, url) {
   }
 
   // ---------- API keys ----------
-  if (path === '/api/me/keys' && req.method === 'GET') {
+  // Managing keys is session-only: a leaked key must not be able to mint more
+  // keys, widen its own scopes, or extend its own expiry.
+  if (path.startsWith('/api/me/keys')) {
     if (!user) return fail(401, 'auth.unauthorized')
-    return send(res, 200, q.all('SELECT key, name, status, created FROM api_keys WHERE user_id=?', user.id))
+    if (user.via === 'key') return fail(403, 'key.sessionOnly')
+  }
+  if (path === '/api/me/keys' && req.method === 'GET') {
+    const now = Date.now()
+    return send(res, 200, q.all(
+      'SELECT key, name, status, scopes, expires, last_used, created FROM api_keys WHERE user_id=? ORDER BY created DESC',
+      user.id).map(k => ({ ...k, expired: k.expires > 0 && k.expires <= now })))
   }
   if (path === '/api/me/keys' && req.method === 'POST') {
-    if (!user) return fail(401, 'auth.unauthorized')
     const body = await readJson(req)
+    const scopes = [...parseScopes(Array.isArray(body.scopes) ? body.scopes.join(',') : body.scopes)]
+    if (!scopes.length) return fail(400, 'key.noScopes')
+    const days = Math.max(0, Math.min(3650, Number(body.expires_days) || 0))
+    const expires = days > 0 ? Date.now() + days * 86400_000 : 0
     const key = 'vh_' + newToken()
-    q.run('INSERT INTO api_keys(key, user_id, name, created) VALUES(?,?,?,?)', key, user.id, String(body.name || ''), nowIso())
-    return send(res, 200, { key })
+    q.run('INSERT INTO api_keys(key, user_id, name, scopes, expires, created) VALUES(?,?,?,?,?,?)',
+      key, user.id, String(body.name || ''), scopes.join(','), expires, nowIso())
+    return send(res, 200, { key, scopes, expires })
   }
   const km = path.match(/^\/api\/me\/keys\/([\w-]+)$/)
+  if (km && req.method === 'PATCH') {          // revoke / re-enable without deleting
+    const b = await readJson(req)
+    if (!['active', 'disabled'].includes(b.status)) return fail(400, 'key.badStatus')
+    q.run('UPDATE api_keys SET status=? WHERE key=? AND user_id=?', b.status, km[1], user.id)
+    return send(res, 200, { ok: true, status: b.status })
+  }
   if (km && req.method === 'DELETE') {
-    if (!user) return fail(401, 'auth.unauthorized')
     q.run('DELETE FROM api_keys WHERE key=? AND user_id=?', km[1], user.id)
     return send(res, 200, { ok: true })
   }
 
   // ---------- admin ----------
   if (path.startsWith('/api/admin/')) {
-    if (!isAdmin(user)) return fail(user ? 403 : 401, 'auth.forbidden')
+    // An API key never reaches the admin surface, whatever its owner's role.
+    if (!isAdminSession(user)) return fail(user ? 403 : 401, 'auth.forbidden')
 
     if (path === '/api/admin/check') return send(res, 200, { ok: true, ffmpeg: await hasFfmpeg() })
 

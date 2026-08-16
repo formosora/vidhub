@@ -11,6 +11,7 @@ const password = ref('')
 const password2 = ref('')
 const err = ref('')
 const busy = ref(false)
+const remember = ref(false)
 
 // ---- captcha ----
 const capSvg = ref('')
@@ -49,7 +50,7 @@ async function login() {
     const res = await fetch('/api/login', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', ...langHeader() },
-      body: JSON.stringify({ username: username.value, password: password.value }),
+      body: JSON.stringify({ username: username.value, password: password.value, remember: remember.value }),
     })
     const j = await res.json().catch(() => ({}))
     if (res.ok) {
@@ -129,6 +130,11 @@ onMounted(ensureSite)
           </div>
         </div>
       </template>
+
+      <label v-if="mode === 'login'" class="switch" style="margin:.2rem 0 .7rem">
+        <input type="checkbox" v-model="remember" /><span class="knob" />
+        <span class="sw-label">{{ t('lg.remember') }}</span>
+      </label>
 
       <div class="err" style="color:var(--red);font-size:.83rem;min-height:1.2em">{{ err }}</div>
       <button class="btn" style="width:100%" type="submit" :disabled="busy">

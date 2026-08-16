@@ -255,6 +255,15 @@ export async function acceptUpload(req, { user, ip, region, orig, visibility }) 
     return { status: 413, error: why }
   }
 
+  return storeUpload({ tmp, up, orig, ext, kind, vis, user, ip, region, logBase })
+}
+
+/**
+ * Everything after the bytes have landed in `tmp`: blocklist, quota, dedupe,
+ * move into place, probe, thumbnail, queue. Shared by the single-shot upload
+ * and by the resumable one, which assembles its bytes across many requests.
+ */
+export async function storeUpload({ tmp, up, orig, ext, kind, vis, user, ip, region, logBase }) {
   if (hashBlocked(up.sha256)) {
     try { unlinkSync(tmp) } catch {}
     logUpload({ ...logBase, size: up.size, status: 'rejected', msg: ['up.hashBlocked'] })

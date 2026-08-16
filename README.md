@@ -100,7 +100,11 @@ Or `docker compose up -d`.
 | `DELETE /api/recycle` | Purge the bin — own, or site-wide for an admin with `all=1` |
 | `GET/PATCH /api/me` | Read or update personal preferences (default visibility) |
 | `POST /api/me/password` | Change own password (invalidates every session) |
-| `GET/POST /api/me/keys` · `DELETE /api/me/keys/<key>` | API key management |
+| `GET/POST /api/me/keys` · `PATCH/DELETE /api/me/keys/<key>` | API key management (session only) |
+| `POST /api/uploads` | Start a resumable upload → `{id, offset, chunk_size}` |
+| `GET /api/uploads/<id>` | How many bytes the server holds, for resuming |
+| `PATCH /api/uploads/<id>?offset=N` | Append one chunk at a known offset |
+| `POST /api/uploads/<id>/finish` · `DELETE /api/uploads/<id>` | Finalise / abandon |
 | `GET /api/stats` | Site-wide for admins, own figures for uploaders, anonymous only if `stats_public` |
 
 **Admin**
@@ -155,7 +159,7 @@ DATA_DIR=/tmp/vh-test PORT=8098 ADMIN_PASSWORD=TestPass123 node server/server.js
 BASE=http://localhost:8098 ADMIN_PASSWORD=TestPass123 bash test/smoke.sh
 ```
 
-`test/smoke.sh` — 112 assertions, no ffmpeg required. Covers registration and the
+`test/smoke.sh` — 144 assertions, no ffmpeg required. Covers registration and the
 CAPTCHA, visibility and gallery filtering, share-link formats, the bilingual API,
 uploads that must not be executable, the last administrator that must not be
 lockable, public endpoints that must not leak IPs, settings clamping, quarantined
@@ -257,3 +261,47 @@ Every file is either `public` or `private`:
 Users set their default under *My files → Account* and can override it per upload.
 Administrators set the default for new accounts under *Settings → Registration*,
 and can change the visibility of any file from the video list.
+
+## 🔑 API keys
+
+Keys carry explicit scopes rather than the full weight of their owner's account:
+
+| Scope | Grants |
+| --- | --- |
+| `read` | List and read own files |
+| `upload` | Add files — cannot list or delete |
+| `manage` | Visibility changes, deletion, emptying the bin |
+
+An optional expiry date closes the window on a leaked key, `last_used` shows
+whether a key is still live, and a key can be revoked without being deleted.
+
+> An API key **can never** reach the admin panel, create other keys, or change
+> the account password — even when its owner is an administrator. Those need a
+> signed-in session, so a key that leaks cannot escalate itself.
+
+## ⏱ Sessions
+
+Sessions slide: once past halfway, activity pushes the expiry out again, so
+someone working through the day is never signed out mid-task while an abandoned
+session still dies on schedule. `session_max_days` is a hard ceiling measured
+from first sign-in, so no session lives forever. "Keep me signed in" swaps the
+`session_hours` window for `session_remember_days`.
+
+## ⏸ Resumable uploads
+
+Files at or above 16 MB use a resumable session instead of one long POST, since
+a transfer that dies at 90% otherwise starts over. The client asks the server
+how many bytes it holds and continues from there — across a dropped connection,
+a page reload, or a new tab.
+
+```
+POST   /api/uploads              {name, size}          -> {id, offset, chunk_size}
+GET    /api/uploads/<id>                               -> {offset, size}
+PATCH  /api/uploads/<id>?offset=N  <binary chunk>      -> {offset}
+POST   /api/uploads/<id>/finish                        -> the usual upload result
+```
+
+The offset is authoritative on the server. A chunk that does not begin exactly
+at the current offset is refused with the real offset attached, so a confused
+client resynchronises instead of corrupting the file. Sessions nobody returns to
+are swept after 24 hours.

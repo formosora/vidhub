@@ -79,6 +79,11 @@ export const DEFAULTS = {
   leech_allow_empty: 1,             // 无 Referer 时放行 (直接打开/下载工具); 0 = 一并拦截
   login_rate_limit: 10,             // 每 IP 每小时登录尝试
 
+  // ---- sessions ----
+  session_hours: 12,                // 普通会话时长; 活跃时自动滑动续期
+  session_remember_days: 30,        // 勾选「记住我」后的会话时长
+  session_max_days: 90,             // 从首次登录起的硬上限, 0 = 不限
+
   // ---- visibility ----
   default_visibility: 'public',     // 新账号/游客上传的默认可见性: public | private
 
@@ -121,6 +126,9 @@ const LIMITS = {
   login_rate_limit: [1, 10000],
   register_daily_limit: [0, 100000],
   register_rate_limit: [1, 1000],
+  session_hours: [1, 24 * 365],
+  session_remember_days: [1, 3650],
+  session_max_days: [0, 3650],
 }
 
 /** Coerce an incoming setting to the shape its default declares. */

@@ -4,11 +4,18 @@
  */
 import { scryptSync, timingSafeEqual, randomBytes } from 'node:crypto'
 import { q } from './db.js'
-import { conf } from './config.js'
+import { conf, confNum } from './config.js'
 import { newToken, nowIso } from './util.js'
 import { AppError } from './i18n.js'
 
-const SESSION_TTL = 12 * 3600_000
+/** Everything a session or key can authorise. A session always gets all of them. */
+export const SCOPES = ['read', 'upload', 'manage']
+export const ALL_SCOPES = new Set(SCOPES)
+
+export const parseScopes = s =>
+  new Set(String(s || '').split(',').map(x => x.trim()).filter(x => SCOPES.includes(x)))
+
+const hours = () => Math.max(1, confNum('session_hours')) * 3600_000
 
 // ---------- users ----------
 
@@ -55,11 +62,41 @@ export function ensureAdmin() {
 
 // ---------- sessions ----------
 
-export function openSession(userId) {
+/**
+ * Open a session. `remember` swaps the short working TTL for the longer
+ * "keep me signed in" one; both still slide on activity and both are capped by
+ * session_max_days measured from `born`.
+ */
+export function openSession(userId, remember = false) {
   const token = newToken()
-  q.run('INSERT INTO sessions(token, user_id, exp) VALUES(?,?,?)', token, userId, Date.now() + SESSION_TTL)
-  q.run('DELETE FROM sessions WHERE exp < ?', Date.now())
+  const now = Date.now()
+  const ttl = remember ? Math.max(1, confNum('session_remember_days')) * 86400_000 : hours()
+  q.run('INSERT INTO sessions(token, user_id, exp, born, seen) VALUES(?,?,?,?,?)',
+    token, userId, now + ttl, now, now)
+  q.run('DELETE FROM sessions WHERE exp < ?', now)
   return token
+}
+
+/**
+ * Sliding renewal: once a session is past its halfway point, push the expiry
+ * out again — so someone using the site daily is never logged out mid-task,
+ * while an abandoned session still dies on schedule. `session_max_days` is the
+ * hard ceiling from first sign-in, so a session cannot live forever.
+ */
+function slide(sess, token) {
+  const now = Date.now()
+  const ttl = Math.max(hours(), sess.exp - sess.born)   // preserve a "remember me" window
+  if (sess.exp - now > ttl / 2) {
+    // not yet halfway; only refresh the activity stamp, and only once a minute
+    if (now - sess.seen > 60_000) q.run('UPDATE sessions SET seen=? WHERE token=?', now, token)
+    return sess.exp
+  }
+  const capDays = confNum('session_max_days')
+  const ceiling = capDays > 0 ? (sess.born || now) + capDays * 86400_000 : Infinity
+  const next = Math.min(now + ttl, ceiling)
+  if (next > sess.exp) q.run('UPDATE sessions SET exp=?, seen=? WHERE token=?', next, now, token)
+  else q.run('UPDATE sessions SET seen=? WHERE token=?', now, token)
+  return next
 }
 
 export function closeSession(token) {
@@ -112,20 +149,36 @@ export const captchaThrottled = ip => bump('captcha', ip) > 60
  * Resolve the caller: Bearer session token or API key.
  * Returns { id, username, role } or null.
  */
+const loadUser = id =>
+  q.get('SELECT id, username, role, daily_limit, default_visibility FROM users WHERE id = ? AND status = ?', id, 'active')
+
 export function identify(req) {
   const raw = (req.headers.authorization || '').replace(/^Bearer\s+/i, '') || req.headers['x-api-key'] || ''
   if (!raw) return null
-  const sess = q.get('SELECT user_id, exp FROM sessions WHERE token = ?', raw)
-  if (sess && sess.exp > Date.now()) {
-    const u = q.get('SELECT id, username, role, daily_limit, default_visibility FROM users WHERE id = ? AND status = ?', sess.user_id, 'active')
-    if (u) return u
+  const now = Date.now()
+
+  const sess = q.get('SELECT user_id, exp, born, seen FROM sessions WHERE token = ?', raw)
+  if (sess && sess.exp > now) {
+    const u = loadUser(sess.user_id)
+    if (u) return { ...u, via: 'session', scopes: ALL_SCOPES, exp: slide(sess, raw) }
   }
-  const key = q.get('SELECT user_id FROM api_keys WHERE key = ? AND status = ?', raw, 'active')
+
+  const key = q.get('SELECT user_id, scopes, expires, last_used FROM api_keys WHERE key = ? AND status = ?', raw, 'active')
   if (key) {
-    const u = q.get('SELECT id, username, role, daily_limit, default_visibility FROM users WHERE id = ? AND status = ?', key.user_id, 'active')
-    if (u) return u
+    if (key.expires > 0 && key.expires <= now) return null      // expired key
+    const u = loadUser(key.user_id)
+    if (u) {
+      // one write a minute at most; the timestamp is for auditing, not billing
+      if (now - key.last_used > 60_000) q.run('UPDATE api_keys SET last_used=? WHERE key=?', now, raw)
+      return { ...u, via: 'key', scopes: parseScopes(key.scopes) }
+    }
   }
   return null
 }
 
 export const isAdmin = u => !!u && u.role === 'admin'
+
+/** API keys never reach the admin surface, whatever their owner's role is. */
+export const isAdminSession = u => isAdmin(u) && u?.via !== 'key'
+
+export const hasScope = (u, scope) => !!u && (u.scopes ? u.scopes.has(scope) : true)
