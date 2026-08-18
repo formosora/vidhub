@@ -41,6 +41,10 @@ const M = {
   'hook.notFound':         ['Webhook 不存在', 'No such webhook'],
   'hook.badEvents':        ['事件名无效', 'Unknown event name'],
 
+  // ---- backups ----
+  'backup.notFound':       ['备份文件不存在', 'No such backup file'],
+  'backup.failed':         ['备份失败', 'Backup failed'],
+
   // ---- users (admin) ----
   'user.notFound':         ['用户不存在', 'No such user'],
   'user.lastAdminLocked':  ['这是最后一个管理员，不能降权或禁用', 'This is the last administrator — cannot demote or disable'],
@@ -71,8 +75,26 @@ const M = {
   'sec.ipNotWhitelisted':  ['IP 不在白名单中', 'Your IP is not on the allowlist'],
   'sec.hotlink':           ['禁止盗链', 'Hotlinking is not allowed'],
 
+  // ---- share links ----
+  'share.notFound':        ['分享链接不存在或已被撤销', 'That share link does not exist or was revoked'],
+  'share.expired':         ['分享链接已过期', 'This share link has expired'],
+  'share.exhausted':       ['分享链接的播放次数已用完', 'This share link has run out of views'],
+  'share.wrongPassword':   ['口令错误', 'Wrong password'],
+  'share.needsProtected':  ['该文件的可见性不是「仅限分享链接」，直链本来就能访问，无需分享链接',
+                            'This file is not set to link-only, so its direct URL already works — a share link adds nothing'],
+  'share.tooMany':         ['该文件的分享链接过多，请先撤销一些', 'Too many share links on this file — revoke some first'],
+  'share.badLimits':       ['有效期与播放次数不能为负数', 'Expiry and view limit cannot be negative'],
+
   // ---- player page (server-rendered) ----
   'p.views':               ['{0} 次观看', '{0} views'],
+  'p.locked':              ['需要口令', 'Password required'],
+  'p.lockedHint':          ['这条分享链接受口令保护', 'This share link is password-protected'],
+  'p.passwordPlaceholder': ['请输入口令', 'Enter the password'],
+  'p.unlock':              ['打开', 'Unlock'],
+  'p.askOwner':            ['请向分享者索取新的链接。', 'Ask whoever shared it for a new link.'],
+  'p.expiresOn':           ['{0} 过期', 'expires {0}'],
+  'p.viewsLeft':           ['还可播放 {0} 次', '{0} views left'],
+  'p.needsShareLink':      ['该内容仅可通过分享链接访问', 'This content is only reachable through a share link'],
   'p.poweredBy':           ['由 {0} 提供 — 自托管视频床', 'Powered by {0} — self-hosted video hosting'],
   'p.htmlLang':            ['zh-CN', 'en'],
 

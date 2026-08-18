@@ -12,9 +12,14 @@ import { ensureAdmin } from './lib/auth.js'
 import { handleApi } from './lib/routes.js'
 import { findFile, thumbPath, resumeJobs } from './lib/upload.js'
 import { sweepUploads } from './lib/resumable.js'
-import { playerPage } from './lib/player.js'
+import { startBackups } from './lib/backup.js'
+import { playerPage, unlockPage, gonePage } from './lib/player.js'
+import {
+  getShare, shareBlocked, shareNeedsPassword, checkSharePassword,
+  mintGrant, verifyGrant, countShareView, sweepShares,
+} from './lib/shares.js'
 import { leechBlocked } from './lib/security.js'
-import { send, clientIp } from './lib/util.js'
+import { send, clientIp, readBody } from './lib/util.js'
 import { t, lang } from './lib/i18n.js'
 import { hasFfmpeg } from './lib/media.js'
 
@@ -64,6 +69,8 @@ hasFfmpeg().then(ok => {
   console.log(`[vidhub] ffmpeg: ${ok ? 'available' : 'MISSING — degraded mode'}`)
   resumeJobs()      // re-queue anything left mid-pipeline by a restart
   sweepUploads()    // and drop resumable sessions nobody came back to
+  sweepShares()     // and share links that expired a month ago
+  startBackups()    // hourly check; only acts when backups are switched on
 })
 
 /** RFC 7233 single-range streaming — required for seeking in <video>. */
@@ -134,6 +141,10 @@ http.createServer(async (req, res) => {
       const v = loadVideo(name)
       if (!v || v.status === 'recycled') return send(res, 404, 'not found', 'text/plain', MEDIA_HEADERS)
       if (v.status === 'banned') return send(res, 451, 'content under review', 'text/plain', MEDIA_HEADERS)
+      // A `protected` file has no working direct URL — only a share page can
+      // mint the signed grant that opens it.
+      if (v.visibility === 'protected' && !verifyGrant(name, url.searchParams.get('k')))
+        return send(res, 403, 'share link required', 'text/plain', MEDIA_HEADERS)
       if (leechBlocked(req)) return send(res, 403, 'hotlink blocked', 'text/plain', MEDIA_HEADERS)
       const file = findFile(v)
       if (!file) return send(res, 404, 'not found', 'text/plain', MEDIA_HEADERS)
@@ -158,9 +169,12 @@ http.createServer(async (req, res) => {
     if (path.startsWith('/t/')) {
       const name = path.slice(3)
       if (!validName(name)) return send(res, 400, 'bad name', 'text/plain', BASE_HEADERS)
-      const v = q.get('SELECT status FROM videos WHERE name = ?', name)
+      const v = q.get('SELECT status, visibility FROM videos WHERE name = ?', name)
       const tp = thumbPath(name)
       if (!v || v.status !== 'ok' || !existsSync(tp)) return send(res, 404, 'not found', 'text/plain', BASE_HEADERS)
+      // The poster frame gives away the content too — gate it the same way.
+      if (v.visibility === 'protected' && !verifyGrant(name, url.searchParams.get('k')))
+        return send(res, 403, 'share link required', 'text/plain', BASE_HEADERS)
       res.writeHead(200, { ...MEDIA_HEADERS, 'Content-Type': 'image/jpeg', 'Cache-Control': 'public, max-age=86400' })
       return createReadStream(tp).pipe(res)
     }
@@ -173,7 +187,48 @@ http.createServer(async (req, res) => {
       if (!v || v.status === 'recycled') return send(res, 404, t(L, 'c.notFound'), 'text/plain', BASE_HEADERS)
       if (v.status === 'banned')
         return send(res, 451, `<h1>${t(L, 'c.underReview')}</h1>`, 'text/html; charset=utf-8', BASE_HEADERS)
+      if (v.visibility === 'protected')
+        return send(res, 403, gonePage('p.needsShareLink', L), 'text/html; charset=utf-8', BASE_HEADERS)
       return send(res, 200, playerPage(v, L), 'text/html; charset=utf-8', BASE_HEADERS)
+    }
+
+    // ---- share link ----
+    if (path.startsWith('/s/')) {
+      const token = path.slice(3)
+      const L = lang(req, url)
+      const html = (code, body) => send(res, code, body, 'text/html; charset=utf-8', BASE_HEADERS)
+
+      const s = getShare(token)
+      const blocked = shareBlocked(s)
+      if (blocked) return html(blocked === 'share.notFound' ? 404 : 410, gonePage(blocked, L))
+
+      const v = loadVideo(s.name)
+      if (!v || v.status === 'recycled') return html(404, gonePage('share.notFound', L))
+      if (v.status === 'banned') return html(451, `<h1>${t(L, 'c.underReview')}</h1>`)
+
+      // A share never outlives itself: the streaming grant is clamped to the
+      // link's own expiry, so a 10-minute link cannot hand out 6 hours of video.
+      const grantFor = () => mintGrant(s.name, s.expires)
+
+      if (req.method === 'POST') {                    // unlock form submission
+        const form = new URLSearchParams(await readBody(req, 4096).catch(() => ''))
+        if (!checkSharePassword(s, form.get('password')))
+          return html(401, unlockPage(token, L, { error: 'share.wrongPassword' }))
+        // Redirect so the password leaves the request body behind and a reload
+        // (or a copied URL) keeps working until the grant lapses.
+        res.writeHead(302, { ...BASE_HEADERS, Location: `/s/${token}?k=${encodeURIComponent(grantFor())}` })
+        return res.end()
+      }
+
+      const k = url.searchParams.get('k')
+      if (shareNeedsPassword(s) && !verifyGrant(s.name, k))
+        return html(200, unlockPage(token, L))
+
+      countShareView(clientIp(req), token)
+      // Re-read: the view we just counted decides whether this was the last one.
+      const after = getShare(token)
+      const grant = verifyGrant(s.name, k) ? k : grantFor()
+      return html(200, playerPage(v, L, { grant, share: after || s }))
     }
 
     // ---- static + SPA fallback ----

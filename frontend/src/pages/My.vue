@@ -5,6 +5,7 @@ import { api, absUrl, ensureSite, fmtDur, fmtSize, state, type VideoItem, type V
 import { locale, t } from '../i18n'
 import { linkFor } from '../links'
 import ShareBox from '../components/ShareBox.vue'
+import ShareLinks from '../components/ShareLinks.vue'
 import { toast } from '../toast'
 
 const router = useRouter()
@@ -67,8 +68,16 @@ async function emptyBin() {
   load()
 }
 
+/** Cycles public → unlisted → link-only → public. */
+const VIS_CYCLE: Visibility[] = ['public', 'private', 'protected']
+const VIS_LABEL: Record<string, string> = { public: '🌐 vis.public', private: '🔒 vis.private', protected: '🔗 vis.protected' }
+const visLabel = (vis: string) => {
+  const [icon, key] = (VIS_LABEL[vis] || VIS_LABEL.public).split(' ')
+  return `${icon} ${t(key)}`
+}
+
 async function toggleVisibility(v: VideoItem) {
-  const next: Visibility = v.visibility === 'public' ? 'private' : 'public'
+  const next = VIS_CYCLE[(VIS_CYCLE.indexOf(v.visibility as Visibility) + 1) % VIS_CYCLE.length]
   const res = await api(`/api/videos/${v.name}`, {
     method: 'PATCH',
     body: JSON.stringify({ visibility: next }),
@@ -186,14 +195,15 @@ onMounted(async () => {
           <button
             v-if="tab === 'videos'"
             class="pill vis-pill" :class="v.visibility"
-            :title="v.visibility === 'public' ? t('vis.makePrivate') : t('vis.makePublic')"
+            :title="t('vis.next')"
             @click="toggleVisibility(v)"
-          >{{ v.visibility === 'public' ? '🌐 ' + t('vis.public') : '🔒 ' + t('vis.private') }}</button>
+          >{{ visLabel(v.visibility) }}</button>
           <div class="ops">
             <template v-if="tab === 'videos'">
-              <button class="btn ghost sm" @click="copy(linkFor(v, 'direct'))">{{ t('tab.direct') }}</button>
+              <!-- a link-only file has no working direct URL to copy -->
+              <button v-if="v.visibility !== 'protected'" class="btn ghost sm" @click="copy(linkFor(v, 'direct'))">{{ t('tab.direct') }}</button>
               <button class="btn ghost sm" :class="{ on: openShare === v.name }" @click="toggleShare(v.name)">
-                {{ t('c.share') }} {{ openShare === v.name ? '▾' : '▸' }}
+                {{ v.visibility === 'protected' ? t('sl.title') : t('c.share') }} {{ openShare === v.name ? '▾' : '▸' }}
               </button>
               <button class="btn danger sm" @click="del(v)">{{ t('c.delete') }}</button>
             </template>
@@ -203,7 +213,10 @@ onMounted(async () => {
             </template>
           </div>
         </div>
-        <ShareBox v-if="tab === 'videos' && openShare === v.name" :item="v" />
+        <template v-if="tab === 'videos' && openShare === v.name">
+          <ShareLinks v-if="v.visibility === 'protected'" :name="v.name" />
+          <ShareBox v-else :item="v" />
+        </template>
         </template>
       </div>
       <p v-if="tab === 'videos' && videos.length" class="muted2" style="margin:.7rem 0 0;font-size:.75rem">
@@ -279,13 +292,17 @@ onMounted(async () => {
           <label>{{ t('vis.default') }} <span class="muted2">— {{ t('vis.defaultHint') }}</span></label>
           <div class="vis-choice">
             <button
-              class="vis-btn" :class="{ on: state.me?.default_visibility !== 'private' }"
+              class="vis-btn" :class="{ on: (state.me?.default_visibility || 'public') === 'public' }"
               :disabled="savingPref" @click="setDefaultVisibility('public')"
             ><b>🌐 {{ t('vis.public') }}</b><small>{{ t('vis.publicHint') }}</small></button>
             <button
               class="vis-btn" :class="{ on: state.me?.default_visibility === 'private' }"
               :disabled="savingPref" @click="setDefaultVisibility('private')"
             ><b>🔒 {{ t('vis.private') }}</b><small>{{ t('vis.privateHint') }}</small></button>
+            <button
+              class="vis-btn" :class="{ on: state.me?.default_visibility === 'protected' }"
+              :disabled="savingPref" @click="setDefaultVisibility('protected')"
+            ><b>🔗 {{ t('vis.protected') }}</b><small>{{ t('vis.protectedHint') }}</small></button>
           </div>
         </div>
         <p class="muted2" style="font-size:.75rem;margin:.4rem 0 0">{{ t('vis.warning') }}</p>
@@ -312,6 +329,7 @@ onMounted(async () => {
 }
 .vis-pill.public { background: rgba(52, 211, 153, .14); color: #6ee7b7; }
 .vis-pill.private { background: rgba(148, 163, 184, .16); color: #cbd5e1; }
+.vis-pill.protected { background: rgba(125, 162, 255, .18); color: #a8bcff; }
 .vis-pill:hover { border-color: currentColor; }
 
 .vis-choice { display: flex; flex-wrap: wrap; gap: .6rem; }

@@ -93,6 +93,12 @@ export const DEFAULTS = {
   disk_reserve_gb: 2,               // 剩余空间低于此值时拒绝新上传, 0 = 不检查
   disk_warn_gb: 10,                 // 低水位告警阈值, 0 = 不告警
 
+  // ---- backups ----
+  // 关闭为默认: 备份要占盘, 该由站长明确开启并知道快照放在哪里。
+  backup_enabled: 0,
+  backup_interval_hours: 24,
+  backup_keep: 7,                   // 保留最近几份, 超出的自动删除
+
   // ---- webhooks ----
   webhook_timeout_sec: 10,          // 单次投递超时
   webhook_retries: 3,               // 失败重试次数 (指数退避)
@@ -145,6 +151,8 @@ const LIMITS = {
   session_max_days: [0, 3650],
   webhook_timeout_sec: [1, 120],
   webhook_retries: [1, 10],
+  backup_interval_hours: [1, 24 * 365],
+  backup_keep: [1, 365],
   disk_reserve_gb: [0, 10000],
   disk_warn_gb: [0, 10000],
 }

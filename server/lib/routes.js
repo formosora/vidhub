@@ -20,7 +20,9 @@ import { hasFfmpeg } from './media.js'
 import { send, readJson, clientIp, today, newToken, nowIso } from './util.js'
 import { t, lang, AppError } from './i18n.js'
 import { EVENTS, checkTarget, deliverTest, emit } from './webhooks.js'
-import { unlinkSync, statSync } from 'node:fs'
+import { listBackups, backupPath, removeBackup, runBackup, backupStatus } from './backup.js'
+import { createShare, sharesFor, getShare, revokeShare, dropSharesFor, shareOut } from './shares.js'
+import { unlinkSync, statSync, createReadStream } from 'node:fs'
 
 const tokenOf = req => (req.headers.authorization || '').replace(/^Bearer\s+/i, '')
 const page = (url, def = 20, max = 100) => {
@@ -49,7 +51,16 @@ const videoOut = v => ({
 const activeAdmins = () =>
   q.get("SELECT COUNT(*) c FROM users WHERE role='admin' AND status='active'").c
 
-const asVisibility = v => (v === 'private' ? 'private' : v === 'public' ? 'public' : null)
+/**
+ * public    — listed in the gallery, direct link works
+ * private   — unlisted, direct link still works (an obscure URL, not a lock)
+ * protected — every direct URL refused; reachable only via a share link
+ */
+const VISIBILITIES = ['public', 'private', 'protected']
+const asVisibility = v => (VISIBILITIES.includes(v) ? v : null)
+
+/** One file does not need dozens of live links; a runaway loop should not make them. */
+const MAX_SHARES_PER_VIDEO = 50
 
 export async function handleApi(req, res, path, url) {
   const ip = clientIp(req)
@@ -246,7 +257,7 @@ export async function handleApi(req, res, path, url) {
     return send(res, 200, { total, items: rows.map(videoOut) })
   }
 
-  const vm = path.match(/^\/api\/videos\/([\w.-]+)(\/(restore|force|ban|unban))?$/)
+  const vm = path.match(/^\/api\/videos\/([\w.-]+)(\/(restore|force|ban|unban|shares))?$/)
   if (vm) {
     const [, name, , action] = vm
     const v = q.get('SELECT * FROM videos WHERE name = ?', name)
@@ -284,6 +295,7 @@ export async function handleApi(req, res, path, url) {
       const f = findFile(v); if (f) try { unlinkSync(f) } catch {}
       try { unlinkSync(thumbPath(name)) } catch {}
       q.run('DELETE FROM videos WHERE name=?', name)
+      dropSharesFor(name)
       emit('video.deleted', { name, orig: v.orig, size: v.size, username: v.username, by: user.username })
       return send(res, 200, { ok: true })
     }
@@ -292,6 +304,48 @@ export async function handleApi(req, res, path, url) {
       q.run('UPDATE videos SET status=? WHERE name=?', action === 'ban' ? 'banned' : 'ok', name)
       return send(res, 200, { ok: true })
     }
+
+    // ---------- share links ----------
+    if (action === 'shares' && req.method === 'GET') {
+      if (!mayManage) return fail(403, 'auth.forbidden')
+      if (!hasScope(user, 'read')) return fail(403, 'key.scopeMissing')
+      return send(res, 200, { items: sharesFor(name).map(shareOut) })
+    }
+    if (action === 'shares' && req.method === 'POST') {
+      if (!canWrite) return fail(403, mayManage ? 'key.scopeMissing' : 'auth.forbidden')
+      // A link onto a public or unlisted file would be theatre: the direct URL
+      // works regardless, so the expiry and password would guard nothing.
+      if (v.visibility !== 'protected') return fail(400, 'share.needsProtected')
+      if (sharesFor(name).length >= MAX_SHARES_PER_VIDEO) return fail(429, 'share.tooMany')
+      const b = await readJson(req)
+      // Refused rather than clamped: a negative expiry silently becoming "never"
+      // hands out more access than was asked for, which is the wrong way to be
+      // forgiving about a typo.
+      const hours = b.expires_in_hours === undefined ? 0 : Number(b.expires_in_hours)
+      const views = b.max_views === undefined ? 0 : Number(b.max_views)
+      if (!(hours >= 0) || !(views >= 0)) return fail(400, 'share.badLimits')
+      const s = createShare({
+        name,
+        userId: user.id,
+        password: b.password,
+        expiresInHours: hours,
+        maxViews: views,
+        note: b.note,
+      })
+      return send(res, 200, shareOut(s))
+    }
+  }
+
+  /** Revoking is immediate — the whole point of a link you can take back. */
+  const sm = path.match(/^\/api\/shares\/([a-f0-9]{32})$/)
+  if (sm && req.method === 'DELETE') {
+    if (!user) return fail(401, 'auth.unauthorized')
+    if (!hasScope(user, 'manage')) return fail(403, 'key.scopeMissing')
+    const s = getShare(sm[1])
+    if (!s) return fail(404, 'share.notFound')
+    const v = q.get('SELECT user_id FROM videos WHERE name = ?', s.name)
+    if (v?.user_id !== user.id && !isAdmin(user)) return fail(403, 'auth.forbidden')
+    return send(res, 200, { ok: revokeShare(s.token) })
   }
 
   /**
@@ -327,6 +381,7 @@ export async function handleApi(req, res, path, url) {
       if (f) { try { freed += statSync(f).size } catch {} try { unlinkSync(f) } catch {} }
       try { unlinkSync(thumbPath(v.name)) } catch {}
       q.run('DELETE FROM videos WHERE name=?', v.name)
+      dropSharesFor(v.name)
       purged++
     }
     return send(res, 200, { ok: true, purged, freed })
@@ -540,6 +595,33 @@ export async function handleApi(req, res, path, url) {
         total,
         items: q.all('SELECT * FROM webhook_log ORDER BY id DESC LIMIT ? OFFSET ?', size, off),
       })
+    }
+
+    // ---------- backups ----------
+    if (path === '/api/admin/backups' && req.method === 'GET')
+      return send(res, 200, backupStatus())
+
+    if (path === '/api/admin/backups' && req.method === 'POST') {
+      try { return send(res, 200, { ok: true, ...runBackup() }) }
+      catch (e) { return send(res, 500, { error: String(e.message || e), code: 'backup.failed' }) }
+    }
+
+    const bm = path.match(/^\/api\/admin\/backups\/([\w.-]+)$/)
+    if (bm) {
+      const file = bm[1]
+      const p = backupPath(file)
+      if (!p || !listBackups().some(b => b.file === file)) return fail(404, 'backup.notFound')
+      if (req.method === 'DELETE') return send(res, 200, { ok: removeBackup(file) })
+      if (req.method === 'GET') {
+        // Streamed rather than buffered: the snapshot is as large as the database.
+        res.writeHead(200, {
+          'Content-Type': 'application/octet-stream',
+          'Content-Length': statSync(p).size,
+          'Content-Disposition': `attachment; filename="${file}"`,
+          'Cache-Control': 'no-store',
+        })
+        return createReadStream(p).pipe(res)
+      }
     }
 
     if (path === '/api/admin/jobs' && req.method === 'GET')

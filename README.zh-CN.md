@@ -31,10 +31,12 @@ Vue 3 管理门户 + **零 npm 依赖** Node 服务端（内置 SQLite）+ ffmpe
 **多用户与 API**
 - 管理员 / 上传员 双角色；仅上传用户、禁用、日限额、重置密码
 - 可选的自助注册 + 算术人机验证（笔画绘制，SVG 内不含文字）
-- 每个文件可设公开 / 私有（私有 = 不在广场列出），账号可设默认值
+- 每个文件可设公开 / 私有 / 仅分享链接，账号可设默认值
+- 分享链接可带口令、有效期、播放次数上限，且可单条撤销
 - 界面与 API 全量中英双语，语言跟随浏览器并可手动切换
 - API Key（`Authorization: Bearer vh_xxx`）供第三方工具上传
 - 回收站（软删除/恢复/彻底删除）
+- 数据库定时备份 + 保留策略，后台可直接下载快照
 
 **门户与商业化**
 - 广场（缩略图画廊 + 搜索）、统计页、播放页 OG 分享
@@ -77,6 +79,7 @@ docker run -d --name vidhub -p 8081:8080 \
 | `POST /api/register` | 自助注册 —— 需后台开启；限速 + 验证码 |
 | `GET /api/public/videos` | 广场。可关闭；不含上传者 IP/用户名 |
 | `GET /v/<name>` · `/t/<name>` · `/p/<name>` · `/d/<name>` | 视频流（Range/206）/ 缩略图 / 播放页 / 下载 |
+| `GET/POST /s/<token>` | 分享链接 —— 播放页，设了口令则先出验证表单 |
 
 **登录后**
 
@@ -87,6 +90,8 @@ docker run -d --name vidhub -p 8081:8080 \
 | `GET /api/videos/<name>` | 单个详情（所有者或管理员） |
 | `PATCH /api/videos/<name>` | 改可见性 `{visibility:"public"\|"private"}` |
 | `DELETE /api/videos/<name>` | 移入回收站 |
+| `GET/POST /api/videos/<name>/shares` | 列出 / 签发分享链接（仅「仅分享链接」的文件） |
+| `DELETE /api/shares/<token>` | 立即撤销某条分享链接 |
 | `POST /api/videos/<name>/restore` · `DELETE …/force` | 恢复 / 彻底删除 |
 | `GET /api/recycle` | 回收站；管理员加 `all=1` 看全站 |
 | `DELETE /api/recycle` | 清空回收站 —— 自己的，管理员加 `all=1` 清全站 |
@@ -108,6 +113,8 @@ docker run -d --name vidhub -p 8081:8080 \
 | `GET /api/admin/check` | 环境探测 → `{ok, ffmpeg}` |
 | `GET /api/admin/stats` | 全站数据，另含用户数、隔离数、回收站、今日 IP 排行 |
 | `GET /api/admin/jobs` | 最近 50 条管线任务 |
+| `GET/POST /api/admin/backups` | 列出备份 / 立即备份 |
+| `GET/DELETE /api/admin/backups/<file>` | 下载 / 删除某个快照 |
 | `GET/POST /api/admin/users` · `PATCH/DELETE /api/admin/users/<id>` | 用户管理 |
 | `GET /api/admin/logs?ip=` | 上传日志（含 IP 归属地） |
 | `GET/POST /api/admin/iprules` · `DELETE …/<id>` | IP 黑白名单 |
@@ -121,7 +128,8 @@ docker run -d --name vidhub -p 8081:8080 \
 ├── frontend/       # Vue 3 + TS + Vite 门户与管理后台
 ├── server/
 │   ├── server.js   # 路由入口：API / 视频流 / 播放页 / 静态
-│   └── lib/        # db · config · auth · security · upload · media · moderate · player · i18n · captcha
+│   └── lib/        # db · config · auth · security · upload · media · moderate · player
+│                   # shares · backup · webhooks · resumable · i18n · captcha
 ├── test/           # smoke.sh · pipeline.sh · captcha.test.mjs
 ├── Dockerfile      # 多阶段构建，单容器，内置 ffmpeg
 └── docker-compose.yml
@@ -151,7 +159,7 @@ DATA_DIR=/tmp/vh-test PORT=8098 ADMIN_PASSWORD=TestPass123 node server/server.js
 BASE=http://localhost:8098 ADMIN_PASSWORD=TestPass123 bash test/smoke.sh
 ```
 
-`test/smoke.sh`（179 条断言，不需要 ffmpeg）——注册开关与验证码、可见性与广场过滤、
+`test/smoke.sh`（227 条断言，不需要 ffmpeg）——注册开关与验证码、可见性与广场过滤、
 分享链接格式、双语 API、上传内容不可执行、最后一个管理员不可锁死、公开接口不泄露
 IP、设置项越界钳制、隔离内容不可重传、配额与防盗链、越权边界、Range/路径穿越。
 
@@ -176,6 +184,12 @@ node --test test/captcha.test.mjs
 - 上传文件与门户同源，但非视频/图片一律 `Content-Disposition: attachment` +
   `application/octet-stream`；`/v/` 响应带 `sandbox` CSP 与 `nosniff`
 - 系统始终保留至少一个可用管理员（降权/禁用/删除最后一个会被拒绝）
+- `private` 是「不列出」不是「加锁」，详见 [可见性](#-可见性)；`protected` 才是有真正访问
+  控制的那一档：所有直链一律拒绝，取流必须持有分享页签发的短期单文件签名 grant
+- 分享口令用 scrypt + 每条链接独立 salt 存储，API 永不回传；撤销立即生效，但已经
+  发出去的 grant 是靠几小时内自然过期，而不是逐个召回
+- 备份快照里**什么都有** —— 密码哈希、API Key、分享签名密钥。下载下来的快照请当作
+  正式数据库同等对待
 - 「自定义 head / 页脚 / 广告」是**管理员自持的原始 HTML 注入点**，按设计不转义 ——
   只应授予可信管理员
 - 自助注册默认**关闭**，开启后新账号一律是「上传员」；限速拆成两层——尝试次数
@@ -219,19 +233,75 @@ node --test test/captcha.test.mjs
 
 ## 👁 可见性
 
-每个文件有 `public` / `private` 两种可见性：
+每个文件有三档可见性：
 
-| | 广场列出 | 直链 / 播放页 / 嵌入 |
-| --- | --- | --- |
-| 公开 | ✅ | ✅ |
-| 私有 | ❌ | ✅ |
+| | 广场列出 | 直链 / 播放页 / 嵌入 | 分享链接 |
+| --- | --- | --- | --- |
+| 公开 | ✅ | ✅ | — |
+| 私有（`private`） | ❌ | ✅ | — |
+| 仅分享链接（`protected`） | ❌ | ❌ | ✅ |
 
-> ⚠️ **「私有」是「不列出」，不是「加锁」。** 视频床的链接必须能分享和嵌入，
-> 做成鉴权访问会直接废掉 embed。文件名是 sha256 前 16 位、不可枚举，实际隐私性
-> 足够日常使用，但**不要用来存敏感内容**。需要真正的访问控制请另开需求。
+> ⚠️ **「私有」是「不列出」，不是「加锁」。** 文件名是 sha256 前 16 位、不可枚举，
+> 但拿到 URL 的人就永久拿到了。日常用够了；**真正需要控制访问的内容请设为
+> 「仅分享链接」** —— 那一档背后才有真正的访问控制。
 
 账号可在「我的 → 账号」设默认值，上传时也能临时改；管理员可在「设置 → 注册」
 设定新账号的默认值，并在视频列表里改任意文件的可见性。
+
+## 🔗 分享链接
+
+设为 `protected` 的文件会拒绝一切直链 —— `/v/`、`/d/`、`/t/`、`/p/` 一律 403，
+只能通过所有者签发的分享链接访问。每条链接可以带：
+
+| | |
+| --- | --- |
+| 口令 | 在分享页输入；scrypt 哈希存储，API 永不回传 |
+| 有效期 | 1 小时到 30 天，或永不过期 |
+| 播放次数上限 | 同一访问者 1 小时内只计 1 次，刷新页面不会消耗次数 |
+| 撤销 | 立即生效，且只影响这一条，其余链接照常 |
+
+```bash
+curl -X POST http://localhost:8081/api/videos/<name>/shares \
+  -H "Authorization: Bearer <token>" -H 'Content-Type: application/json' \
+  -d '{"password":"letmein","expires_in_hours":24,"max_views":5,"note":"给评审看"}'
+```
+
+**这不会破坏嵌入** —— 这正是当初否掉「鉴权访问」的理由。token 本身就在 URL 里，
+`<iframe src="/s/<token>">` 和普通播放页表现完全一致。
+
+取流的授权用的是短期签名 grant，而不是 Cookie 或会话：分享页把
+`?k=<exp>.<sig>` 写进自己的媒体地址，`/v/` 校验这个 HMAC。这样既保住了无 Cookie
+的设计（依然没有 CSRF 面），也不影响 Range 请求，而且从页面里复制出去的媒体地址
+几小时后就失效，而不是永久有效。grant 还会被自身链接的有效期钳制 —— 十分钟的
+链接不可能签发出六小时的播放权。
+
+## 💾 备份
+
+不可再生的东西只有两样：SQLite 数据库和媒体目录。媒体是普通文件，rsync 或卷快照
+本来就能覆盖；需要小心的是数据库 —— 在服务端正在写入时直接拷贝 `vidhub.db`，
+可能抓到写了一半的页或漏掉 WAL，拿到一个「看起来没问题、恢复时才发现坏了」的文件。
+
+vidhub 用的是 SQLite 自带的 `VACUUM INTO`：它在一个读事务里写出一份全新、内部
+一致、且已经过整理压缩的数据库。不停服、不长时间持写锁，输出也是单个自包含文件，
+不需要连带保存 `-wal`/`-shm`。
+
+在「设置 → 数据库备份」里开启（默认关闭 —— 备份要占盘，该由站长明确决定），或者
+在「安全」页点「立即备份」。快照落在 `DATA_DIR/backups/`，超出保留份数的自动删除。
+
+恢复就是普通的文件操作：
+
+```bash
+docker stop vidhub
+# 把快照放回去当作正式库
+cp vidhub-20260818-030000.db /var/lib/docker/volumes/vidhub-data/_data/vidhub.db
+# 关键：残留的旧 WAL 会把刚恢复的库写坏
+rm -f /var/lib/docker/volumes/vidhub-data/_data/vidhub.db-wal \
+      /var/lib/docker/volumes/vidhub-data/_data/vidhub.db-shm
+docker start vidhub
+```
+
+> 数据库里存的是元数据，不是视频本体。单独恢复它只会把账号、设置和文件索引回滚 ——
+> 请和媒体目录的备份配套使用，否则索引会指向磁盘上已经不存在的文件。
 
 ## 🔑 API Key
 
@@ -283,6 +353,8 @@ POST   /api/uploads/<id>/finish                    -> 与普通上传相同的�
 | `moderation.flagged` | 内容审核隔离或删除了某个文件 |
 | `video.deleted` | 文件被永久删除 |
 | `user.registered` | 有人注册 |
+| `backup.completed` | 数据库快照写入成功 |
+| `backup.failed` | 快照写入失败 —— 最值得告警的一条 |
 
 每次投递都带：
 

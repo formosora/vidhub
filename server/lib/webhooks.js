@@ -20,6 +20,8 @@ export const EVENTS = [
   'video.deleted',        // permanently removed
   'user.registered',      // self-service sign-up
   'storage.low',          // free disk space crossed the warning threshold
+  'backup.completed',     // snapshot written
+  'backup.failed',        // snapshot could not be written — the one to alert on
 ]
 
 const LOG_KEEP = 500

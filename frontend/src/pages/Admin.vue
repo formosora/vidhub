@@ -253,7 +253,7 @@ function reload(which = tab.value) {
   if (which === 'videos') loadVideos()
   if (which === 'recycle') loadBin()
   if (which === 'users') loadUsers()
-  if (which === 'security') loadSecurity()
+  if (which === 'security') { loadSecurity(); loadBackups() }
   if (which === 'hooks') loadHooks()
   if (which === 'settings') loadSettings()
 }
@@ -266,6 +266,56 @@ watch(locale, () => reload())        // pull server-rendered strings in the new 
 async function setVideoVisibility(v: VideoItem, vis: Visibility) {
   const res = await api(`/api/videos/${v.name}`, { method: 'PATCH', body: JSON.stringify({ visibility: vis }) })
   if (res.ok) { v.visibility = vis; toast(t('vis.changed')) } else toast(t('c.failed'), false)
+}
+
+/** Same public → unlisted → link-only cycle the owner sees in "My files". */
+const VIS_CYCLE: Visibility[] = ['public', 'private', 'protected']
+const nextVisibility = (vis: string) =>
+  VIS_CYCLE[(VIS_CYCLE.indexOf(vis as Visibility) + 1) % VIS_CYCLE.length]
+const visLabel = (vis: string) =>
+  vis === 'protected' ? '🔗 ' + t('vis.protected')
+    : vis === 'private' ? '🔒 ' + t('vis.private')
+      : '🌐 ' + t('vis.public')
+
+// ================= backups =================
+interface BackupFile { file: string; size: number; created: string }
+interface BackupStatus {
+  enabled: boolean; interval_hours: number; keep: number
+  total_size: number; last: string | null; next: string | null
+  items: BackupFile[]
+}
+const backups = ref<BackupStatus | null>(null)
+const backingUp = ref(false)
+
+async function loadBackups() {
+  const res = await api('/api/admin/backups')
+  if (res.ok) backups.value = await res.json()
+}
+async function runBackupNow() {
+  backingUp.value = true
+  const res = await api('/api/admin/backups', { method: 'POST' })
+  backingUp.value = false
+  const j = await res.json().catch(() => ({}))
+  if (res.ok) { toast(t('bk.done', j.file)); loadBackups() }
+  else toast(j.error || t('c.failed'), false)
+}
+async function delBackup(b: BackupFile) {
+  if (!confirm(t('bk.confirmDelete', b.file))) return
+  const res = await api(`/api/admin/backups/${b.file}`, { method: 'DELETE' })
+  if (res.ok) { toast(t('c.ok')); loadBackups() } else toast(t('c.failed'), false)
+}
+/**
+ * Downloaded through fetch rather than a plain link: the endpoint needs the
+ * Authorization header, which an <a download> cannot send.
+ */
+async function downloadBackup(b: BackupFile) {
+  const res = await api(`/api/admin/backups/${b.file}`)
+  if (!res.ok) return toast(t('c.failed'), false)
+  const url = URL.createObjectURL(await res.blob())
+  const a = document.createElement('a')
+  a.href = url; a.download = b.file
+  a.click()
+  URL.revokeObjectURL(url)
 }
 
 onMounted(async () => {
@@ -346,6 +396,7 @@ onMounted(async () => {
           <option value="">{{ t('vis.filterAll') }}</option>
           <option value="public">{{ t('vis.public') }}</option>
           <option value="private">{{ t('vis.private') }}</option>
+          <option value="protected">{{ t('vis.protected') }}</option>
         </select>
       </div>
       <div class="glass-card" style="padding:.6rem 1rem;overflow-x:auto">
@@ -368,9 +419,9 @@ onMounted(async () => {
               <td>
                 <button
                   class="pill vis-pill" :class="v.visibility"
-                  :title="v.visibility === 'public' ? t('vis.makePrivate') : t('vis.makePublic')"
-                  @click="setVideoVisibility(v, v.visibility === 'public' ? 'private' : 'public')"
-                >{{ v.visibility === 'public' ? '🌐 ' + t('vis.public') : '🔒 ' + t('vis.private') }}</button>
+                  :title="t('vis.next')"
+                  @click="setVideoVisibility(v, nextVisibility(v.visibility))"
+                >{{ visLabel(v.visibility) }}</button>
               </td>
               <td>{{ v.views }}</td>
               <td style="white-space:nowrap">
@@ -474,6 +525,36 @@ onMounted(async () => {
 
     <!-- ============ 安全 ============ -->
     <template v-if="tab === 'security'">
+      <div class="glass-card" style="padding:1.2rem;margin-bottom:1rem">
+        <h3 style="margin-top:0">{{ t('bk.title') }} <span class="muted2">— {{ t('bk.hint') }}</span></h3>
+        <div class="row" style="margin-bottom:.8rem;gap:.8rem;flex-wrap:wrap">
+          <button class="btn sm" :disabled="backingUp" @click="runBackupNow">{{ t('bk.now') }}</button>
+          <span class="muted2" style="font-size:.78rem">
+            <template v-if="backups?.enabled">
+              {{ t('bk.scheduleOn', backups.interval_hours, backups.keep) }}
+            </template>
+            <template v-else>{{ t('bk.scheduleOff') }}</template>
+            <template v-if="backups?.last"> · {{ t('bk.last', backups.last.slice(0, 16).replace('T', ' ')) }}</template>
+            <template v-if="backups?.items.length"> · {{ fmtSize(backups.total_size) }}</template>
+          </span>
+        </div>
+        <table class="tbl" v-if="backups?.items.length">
+          <tbody>
+            <tr v-for="b in backups.items" :key="b.file">
+              <td class="mono">{{ b.file }}</td>
+              <td class="hide-m">{{ fmtSize(b.size) }}</td>
+              <td class="hide-m">{{ b.created.slice(0, 16).replace('T', ' ') }}</td>
+              <td style="text-align:right;white-space:nowrap">
+                <button class="btn ghost sm" @click="downloadBackup(b)">{{ t('bk.download') }}</button>
+                <button class="btn danger sm" @click="delBackup(b)">{{ t('c.delete') }}</button>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+        <p v-else class="muted2" style="font-size:.78rem;margin:0">{{ t('bk.empty') }}</p>
+        <p class="muted2" style="font-size:.72rem;margin:.7rem 0 0">{{ t('bk.restoreHint') }}</p>
+      </div>
+
       <div class="glass-card" style="padding:1.2rem;margin-bottom:1rem">
         <h3 style="margin-top:0">{{ t('ad.ipRules') }} <span class="muted2">— {{ t('ad.ipRulesHint') }}</span></h3>
         <div class="row" style="margin-bottom:.8rem">
@@ -634,7 +715,7 @@ onMounted(async () => {
           <div class="form-grid" v-if="settings.allow_register">
             <div class="field"><label>{{ t('set.registerLimit') }}</label><input v-model.number="settings.register_daily_limit" type="number" min="0" /></div>
             <div class="field"><label>{{ t('set.registerRate') }}</label><input v-model.number="settings.register_rate_limit" type="number" min="1" /></div>
-            <div class="field"><label>{{ t('set.defaultVisibility') }}</label><select v-model="settings.default_visibility"><option value="public">{{ t('vis.public') }}</option><option value="private">{{ t('vis.private') }}</option></select></div>
+            <div class="field"><label>{{ t('set.defaultVisibility') }}</label><select v-model="settings.default_visibility"><option value="public">{{ t('vis.public') }}</option><option value="private">{{ t('vis.private') }}</option><option value="protected">{{ t('vis.protected') }}</option></select></div>
           </div>
           <p class="hint">{{ t('set.registerNote') }}</p>
           <p class="hint" v-if="settings.allow_register && !settings.register_captcha">
@@ -782,6 +863,16 @@ onMounted(async () => {
             <div class="field"><label>{{ t('set.diskWarn') }}</label><input v-model.number="settings.disk_warn_gb" type="number" min="0" /></div>
           </div>
           <p class="hint">{{ t('set.diskHint') }}</p>
+        </div>
+
+        <div class="set-section">
+          <h3>{{ t('bk.title') }}</h3>
+          <label class="switch"><input type="checkbox" v-model="settings.backup_enabled" :true-value="1" :false-value="0" /><span class="knob" /><span class="sw-label">{{ t('set.backupEnabled') }}</span></label>
+          <div class="form-grid" v-if="settings.backup_enabled">
+            <div class="field"><label>{{ t('set.backupInterval') }}</label><input v-model.number="settings.backup_interval_hours" type="number" min="1" /></div>
+            <div class="field"><label>{{ t('set.backupKeep') }}</label><input v-model.number="settings.backup_keep" type="number" min="1" /></div>
+          </div>
+          <p class="hint">{{ t('bk.restoreHint') }}</p>
         </div>
 
         <div class="set-section">

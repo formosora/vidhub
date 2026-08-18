@@ -136,6 +136,10 @@ const copyAll = async () => {
         <input type="radio" value="private" v-model="visibility" />
         <b>{{ t('vis.private') }}</b><small>{{ t('vis.privateHint') }}</small>
       </label>
+      <label class="vis-opt" :class="{ on: visibility === 'protected' }">
+        <input type="radio" value="protected" v-model="visibility" />
+        <b>{{ t('vis.protected') }}</b><small>{{ t('vis.protectedHint') }}</small>
+      </label>
     </div>
 
     <div v-if="tasks.length" class="glass-card" style="padding:.8rem 1.2rem;margin-top:1rem">

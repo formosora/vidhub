@@ -38,10 +38,12 @@ in), and an ffmpeg media pipeline — all in one Docker container.
 - Two roles — administrator and uploader — with per-user daily caps, account
   disabling, and password resets
 - Optional self-service registration behind a stroke-drawn arithmetic CAPTCHA
-- Per-file public/unlisted visibility, with a per-account default
+- Per-file public / unlisted / link-only visibility, with a per-account default
+- Share links with an optional password, expiry and view limit — revocable one by one
 - Full English/Chinese localisation of the UI *and* the API
 - API keys (`Authorization: Bearer vh_xxx`) for third-party upload tools
 - Recycle bin (soft delete, restore, permanent delete)
+- Scheduled database backups with retention, downloadable from the admin panel
 
 **Portal**
 - Gallery with thumbnails and search, statistics page, player pages with OG tags
@@ -85,6 +87,7 @@ Or `docker compose up -d`.
 | `POST /api/register` | Self-registration — must be enabled in admin; rate limited + CAPTCHA |
 | `GET /api/public/videos` | Gallery. Can be closed; never includes uploader IP or username |
 | `GET /v/<name>` · `/t/<name>` · `/p/<name>` · `/d/<name>` | Stream (Range/206) / thumbnail / player page / download |
+| `GET/POST /s/<token>` | Share link — player page, or the password prompt when one is set |
 
 **Signed in**
 
@@ -95,6 +98,8 @@ Or `docker compose up -d`.
 | `GET /api/videos/<name>` | One item (owner or admin) |
 | `PATCH /api/videos/<name>` | Change visibility, `{visibility:"public"\|"private"}` |
 | `DELETE /api/videos/<name>` | Move to the recycle bin |
+| `GET/POST /api/videos/<name>/shares` | List / issue share links (link-only files) |
+| `DELETE /api/shares/<token>` | Revoke one share link, immediately |
 | `POST /api/videos/<name>/restore` · `DELETE …/force` | Restore / delete permanently |
 | `GET /api/recycle` | Recycle bin; admins add `all=1` for the whole site |
 | `DELETE /api/recycle` | Purge the bin — own, or site-wide for an admin with `all=1` |
@@ -116,6 +121,8 @@ Or `docker compose up -d`.
 | `GET /api/admin/check` | Environment probe → `{ok, ffmpeg}` |
 | `GET /api/admin/stats` | Site figures plus users, quarantined, bin size, top IPs |
 | `GET /api/admin/jobs` | The 50 most recent pipeline jobs |
+| `GET/POST /api/admin/backups` | List backups / take one now |
+| `GET/DELETE /api/admin/backups/<file>` | Download / delete a snapshot |
 | `GET/POST /api/admin/users` · `PATCH/DELETE /api/admin/users/<id>` | User management |
 | `GET /api/admin/logs?ip=` | Upload log with IP geolocation |
 | `GET/POST /api/admin/iprules` · `DELETE …/<id>` | IP allow/block rules |
@@ -129,7 +136,8 @@ Or `docker compose up -d`.
 ├── frontend/       # Vue 3 + TS + Vite portal and admin panel
 ├── server/
 │   ├── server.js   # entry point: API / media streaming / player pages / static
-│   └── lib/        # db · config · auth · security · upload · media · moderate · player · i18n · captcha
+│   └── lib/        # db · config · auth · security · upload · media · moderate · player
+│                   # shares · backup · webhooks · resumable · i18n · captcha
 ├── test/           # smoke.sh · pipeline.sh · captcha.test.mjs
 ├── Dockerfile      # multi-stage build, single container, ffmpeg included
 └── docker-compose.yml
@@ -161,7 +169,7 @@ DATA_DIR=/tmp/vh-test PORT=8098 ADMIN_PASSWORD=TestPass123 node server/server.js
 BASE=http://localhost:8098 ADMIN_PASSWORD=TestPass123 bash test/smoke.sh
 ```
 
-`test/smoke.sh` — 179 assertions, no ffmpeg required. Covers registration and the
+`test/smoke.sh` — 227 assertions, no ffmpeg required. Covers registration and the
 CAPTCHA, visibility and gallery filtering, share-link formats, the bilingual API,
 uploads that must not be executable, the last administrator that must not be
 lockable, public endpoints that must not leak IPs, settings clamping, quarantined
@@ -193,6 +201,14 @@ node --test test/captcha.test.mjs
   and every `/v/` response carries a `sandbox` CSP and `nosniff`.
 - The system always keeps at least one usable administrator — demoting,
   disabling or deleting the last one is refused.
+- `private` is unlisted, not locked — see [Visibility](#-visibility). `protected`
+  is the level with real access control: every direct URL is refused and a signed,
+  short-lived, per-file grant minted by a share page is required to stream.
+- Share passwords are scrypt-hashed with a per-link salt and are never returned
+  by the API. Revoking a link takes effect immediately; grants it already handed
+  out lapse within hours rather than being individually recallable.
+- Backup snapshots contain **everything** — password hashes, API keys, the share
+  signing key. Treat a downloaded snapshot exactly as you would the live database.
 - Custom head/footer/ad fields are **raw HTML injection points held by the
   administrator** and are deliberately not escaped. Only grant admin to people
   you trust with that.
@@ -247,22 +263,87 @@ everyone, which is a deliberate choice for a public showcase.
 
 ## 👁 Visibility
 
-Every file is either `public` or `private`:
+Every file sits at one of three levels:
 
-| | Listed in the gallery | Direct link / player / embed |
-| --- | --- | --- |
-| Public | ✅ | ✅ |
-| Unlisted (`private`) | ❌ | ✅ |
+| | Listed in the gallery | Direct link / player / embed | Share link |
+| --- | --- | --- | --- |
+| Public | ✅ | ✅ | — |
+| Unlisted (`private`) | ❌ | ✅ | — |
+| Link-only (`protected`) | ❌ | ❌ | ✅ |
 
-> ⚠️ **"Unlisted" means unlisted, not locked.** A video host's links have to be
-> shareable and embeddable; putting them behind authentication would break embeds
-> outright. Filenames are the first 16 hex characters of the content's SHA-256 and
-> cannot be enumerated, which is private enough for everyday use — but **do not
-> use this for sensitive material**. Real access control is a separate feature.
+> ⚠️ **"Unlisted" means unlisted, not locked.** Filenames are the first 16 hex
+> characters of the content's SHA-256 and cannot be enumerated, but anyone who
+> has the URL keeps it forever. That is fine for most uploads. For anything that
+> genuinely needs controlling, use **link-only** — it is the level with real
+> access control behind it.
 
 Users set their default under *My files → Account* and can override it per upload.
 Administrators set the default for new accounts under *Settings → Registration*,
 and can change the visibility of any file from the video list.
+
+## 🔗 Share links
+
+A `protected` file refuses every direct URL — `/v/`, `/d/`, `/t/` and `/p/` all
+answer 403. It is reachable only through a share link its owner issues, and each
+link can carry:
+
+| | |
+| --- | --- |
+| Password | Prompted for on the share page; scrypt-hashed, never returned by the API |
+| Expiry | 1 hour to 30 days, or never |
+| View limit | One viewer counts once per hour, so a reload does not burn a view |
+| Revocation | Immediate, per link — the others keep working |
+
+```bash
+curl -X POST http://localhost:8081/api/videos/<name>/shares \
+  -H "Authorization: Bearer <token>" -H 'Content-Type: application/json' \
+  -d '{"password":"letmein","expires_in_hours":24,"max_views":5,"note":"for review"}'
+```
+
+**This does not break embedding**, which is the whole reason authenticated access
+was rejected as the answer here. The token lives in the URL, so
+`<iframe src="/s/<token>">` behaves exactly like the ordinary player page.
+
+Streaming is authorised by a short-lived signed grant rather than a cookie or a
+session: the share page mints `?k=<exp>.<sig>` into its own media URLs and `/v/`
+verifies the HMAC. That keeps the no-cookie design intact (so still no CSRF
+surface), leaves Range requests untouched, and means a media URL copied out of
+the page stops working within hours instead of never. A grant is also clamped to
+its own link's expiry, so a ten-minute link cannot hand out six hours of video.
+
+## 💾 Backups
+
+Two things here cannot be regenerated: the SQLite database and the media
+directory. Media are plain files that rsync or a volume snapshot already handles.
+The database is the part that needs care — copying `vidhub.db` while the server
+is writing to it can catch a half-written page or miss the WAL, giving you a file
+that looks fine right up until you try to restore it.
+
+vidhub uses SQLite's own `VACUUM INTO`, which writes a fresh, internally
+consistent, already-compacted database from inside a read transaction. No
+downtime, no write lock held for the duration, and no `-wal`/`-shm` sidecars to
+keep alongside the copy.
+
+Turn it on under *Settings → Database backups* (off by default — snapshots cost
+disk, so that should be a deliberate choice), or press **Back up now** under
+*Security*. Snapshots land in `DATA_DIR/backups/` and the oldest are pruned past
+the retention count.
+
+Restoring is a plain file operation:
+
+```bash
+docker stop vidhub
+# put the snapshot in place as the live database
+cp vidhub-20260818-030000.db /var/lib/docker/volumes/vidhub-data/_data/vidhub.db
+# IMPORTANT: a stale WAL beside a restored database can corrupt it
+rm -f /var/lib/docker/volumes/vidhub-data/_data/vidhub.db-wal \
+      /var/lib/docker/volumes/vidhub-data/_data/vidhub.db-shm
+docker start vidhub
+```
+
+> The database holds metadata, not video bytes. Restoring it alone rolls back
+> accounts, settings and the file index — pair it with your media-directory
+> backup, or the index will reference files that are no longer on disk.
 
 ## 🔑 API keys
 
@@ -320,6 +401,8 @@ band, so a slow or dead endpoint never holds up an upload.
 | `moderation.flagged` | Moderation quarantined or deleted something |
 | `video.deleted` | A file was permanently removed |
 | `user.registered` | Someone signed up |
+| `backup.completed` | A database snapshot was written |
+| `backup.failed` | A snapshot could not be written — the one worth alerting on |
 
 Every delivery carries:
 

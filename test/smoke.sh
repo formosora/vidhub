@@ -130,6 +130,91 @@ ck "per-user session cap enforced" "yes" "$CAPHIT"
 for id in $SIDS; do curl -s -X DELETE "$B/api/uploads/$id" "${NT[@]}" -o/dev/null; done
 ck "reopen after cancelling" '"offset":0' "$(curl -s -X POST $B/api/uploads "${NT[@]}" -H 'Content-Type: application/json' -d '{"name":"s.mp4","size":1000}')"
 
+echo "== backups =="
+ck "status starts empty" '"items":[]' "$(curl -s $B/api/admin/backups "${A[@]}")"
+BK=$(curl -s -X POST $B/api/admin/backups "${A[@]}")
+ck "manual backup writes a file" '"ok":true' "$BK"
+BKF=$(echo "$BK" | sed 's/.*"file":"\([^"]*\)".*/\1/')
+ck "snapshot is non-empty" "true" "$(echo "$BK" | grep -qE '"size":[1-9]' && echo true)"
+ck "it is listed" "$BKF" "$(curl -s $B/api/admin/backups "${A[@]}")"
+curl -s "$B/api/admin/backups/$BKF" "${A[@]}" -o snap.db
+ck "download is a SQLite file" "SQLite format 3" "$(head -c 15 snap.db)"
+ck "download byte-exact" "$(echo "$BK" | sed 's/.*"size":\([0-9]*\).*/\1/')" "$(wc -c < snap.db | tr -d ' ')"
+ck "restored snapshot opens" "1" "$(node --input-type=module -e "
+import { DatabaseSync } from 'node:sqlite'
+const d = new DatabaseSync(process.argv[1], { readOnly: true })
+console.log(d.prepare(\"SELECT COUNT(*) c FROM users WHERE role='admin'\").get().c)
+" "$(pwd)/snap.db" 2>/dev/null)"
+# only our own filenames are reachable — no traversal, no arbitrary reads
+for bad in '../vidhub.db' 'evil.db' 'vidhub-99999999-999999.db'; do
+  ck "backup path refused: $bad" "404" "$(curl -s -o/dev/null -w '%{http_code}' "$B/api/admin/backups/$bad" "${A[@]}")"
+done
+ck "backups need admin" "403" "$(curl -s -o/dev/null -w '%{http_code}' $B/api/admin/backups "${NT[@]}")"
+ck "retention prunes" "1" "$(curl -s -X PUT $B/api/admin/settings "${A[@]}" -H 'Content-Type: application/json' -d '{"backup_keep":1}' -o/dev/null
+  curl -s -X POST $B/api/admin/backups "${A[@]}" -o/dev/null
+  curl -s $B/api/admin/backups "${A[@]}" | grep -o '"file"' | wc -l | tr -d ' ')"
+ck "delete removes it" '"ok":true' "$(curl -s -X DELETE "$B/api/admin/backups/$(curl -s $B/api/admin/backups "${A[@]}" | sed 's/.*"file":"\([^"]*\)".*/\1/')" "${A[@]}")"
+curl -s -X PUT $B/api/admin/settings "${A[@]}" -H 'Content-Type: application/json' -d '{"backup_keep":7}' -o/dev/null
+
+echo "== share links (protected visibility) =="
+head -c 90000 /dev/urandom > prot.mp4
+PN=$(curl -s -X POST "$B/api/videos?name=prot.mp4" "${A[@]}" --data-binary @prot.mp4 | sed 's/.*"name":"\([^"]*\)".*/\1/')
+ck "accepts protected"  '"visibility":"protected"' "$(curl -s -X PATCH "$B/api/videos/$PN" "${A[@]}" -H 'Content-Type: application/json' -d '{"visibility":"protected"}')"
+ck "rejects bogus value" "400" "$(curl -s -o/dev/null -w '%{http_code}' -X PATCH "$B/api/videos/$PN" "${A[@]}" -H 'Content-Type: application/json' -d '{"visibility":"protectd"}')"
+# every direct route must now refuse
+ck "direct stream refused"   "403" "$(curl -s -o/dev/null -w '%{http_code}' $B/v/$PN)"
+ck "download refused"        "403" "$(curl -s -o/dev/null -w '%{http_code}' $B/d/$PN)"
+ck "player page refused"     "403" "$(curl -s -o/dev/null -w '%{http_code}' $B/p/$PN)"
+ck "not in the gallery"      "" "$(curl -s "$B/api/public/videos?size=60" | grep -o "$PN")"
+
+ck "no link on a public file" "share.needsProtected" "$(curl -s -X PATCH "$B/api/videos/$NVIS" "${A[@]}" -H 'Content-Type: application/json' -d '{"visibility":"public"}' -o/dev/null
+  curl -s -X POST "$B/api/videos/$NVIS/shares" "${A[@]}" -H 'Content-Type: application/json' -d '{}')"
+ck "negative expiry refused" "share.badLimits" "$(curl -s -X POST "$B/api/videos/$PN/shares" "${A[@]}" -H 'Content-Type: application/json' -d '{"expires_in_hours":-1}')"
+ck "negative views refused"  "share.badLimits" "$(curl -s -X POST "$B/api/videos/$PN/shares" "${A[@]}" -H 'Content-Type: application/json' -d '{"max_views":-1}')"
+
+SHR=$(curl -s -X POST "$B/api/videos/$PN/shares" "${A[@]}" -H 'Content-Type: application/json' -d '{"note":"team"}')
+STOK=$(echo "$SHR" | sed 's/.*"token":"\([^"]*\)".*/\1/')
+ck "share issued"      '"state":"ok"' "$SHR"
+ck "no password by default" '"has_password":false' "$SHR"
+ck "embed points at /s/" "iframe src=\\\"/s/$STOK\\\"" "$SHR"
+ck "share page opens"  "200" "$(curl -s -o/dev/null -w '%{http_code}' $B/s/$STOK)"
+ck "share page has a player" "<video" "$(curl -s $B/s/$STOK)"
+
+# the grant the page mints is what opens the stream — and only that stream
+GK=$(curl -s $B/s/$STOK | grep -o "src=\"/v/[^\"]*\"" | head -1 | sed 's/.*k=//;s/"$//')
+ck "grant opens the stream"  "200" "$(curl -s -o/dev/null -w '%{http_code}' "$B/v/$PN?k=$GK")"
+ck "grant survives Range"    "206" "$(curl -s -o/dev/null -w '%{http_code}' -H 'Range: bytes=0-99' "$B/v/$PN?k=$GK")"
+ck "forged grant refused"    "403" "$(curl -s -o/dev/null -w '%{http_code}' "$B/v/$PN?k=99999999999999.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")"
+ck "empty grant refused"     "403" "$(curl -s -o/dev/null -w '%{http_code}' "$B/v/$PN?k=")"
+ck "expired grant refused"   "403" "$(curl -s -o/dev/null -w '%{http_code}' "$B/v/$PN?k=1000000000000.$(echo "$GK" | cut -d. -f2)")"
+
+# password gate
+PSHR=$(curl -s -X POST "$B/api/videos/$PN/shares" "${A[@]}" -H 'Content-Type: application/json' -d '{"password":"letmein"}')
+PTOK=$(echo "$PSHR" | sed 's/.*"token":"\([^"]*\)".*/\1/')
+ck "password flag set"     '"has_password":true' "$PSHR"
+ck "password never echoed" "" "$(echo "$PSHR" | grep -o 'letmein\|pass_hash\|salt')"
+ck "locked page, no player" "" "$(curl -s $B/s/$PTOK | grep -o '<video')"
+ck "locked page prompts"   "password" "$(curl -s "$B/s/$PTOK?lang=en")"
+ck "wrong password 401"    "401" "$(curl -s -o/dev/null -w '%{http_code}' -X POST $B/s/$PTOK -d 'password=nope')"
+ck "right password 302"    "302" "$(curl -s -o/dev/null -w '%{http_code}' -X POST $B/s/$PTOK -d 'password=letmein')"
+ck "redirect carries a grant" "/s/$PTOK?k=" "$(curl -s -o/dev/null -w '%{redirect_url}' -X POST $B/s/$PTOK -d 'password=letmein')"
+
+# lifecycle: expiry, exhaustion, revocation
+ck "unknown token 404"  "404" "$(curl -s -o/dev/null -w '%{http_code}' $B/s/00000000000000000000000000000000)"
+ck "malformed token 404" "404" "$(curl -s -o/dev/null -w '%{http_code}' $B/s/not-a-token)"
+ck "revoke works"       '"ok":true' "$(curl -s -X DELETE "$B/api/shares/$PTOK" "${A[@]}")"
+ck "revoked link dead"  "404" "$(curl -s -o/dev/null -w '%{http_code}' $B/s/$PTOK)"
+ck "revoking twice 404" "404" "$(curl -s -o/dev/null -w '%{http_code}' -X DELETE "$B/api/shares/$PTOK" "${A[@]}")"
+
+# another account must not see, mint or revoke links on someone else's file
+ck "others cannot list"   "403" "$(curl -s -o/dev/null -w '%{http_code}' "$B/api/videos/$PN/shares" "${NT[@]}")"
+ck "others cannot issue"  "403" "$(curl -s -o/dev/null -w '%{http_code}' -X POST "$B/api/videos/$PN/shares" "${NT[@]}" -H 'Content-Type: application/json' -d '{}')"
+ck "others cannot revoke" "403" "$(curl -s -o/dev/null -w '%{http_code}' -X DELETE "$B/api/shares/$STOK" "${NT[@]}")"
+
+# deleting the file takes its links with it
+ck "purge kills the links" "404" "$(curl -s -X DELETE "$B/api/videos/$PN/force" "${A[@]}" -o/dev/null
+  curl -s -o/dev/null -w '%{http_code}' $B/s/$STOK)"
+
 echo "== disk guard =="
 ck "admin sees real disk figures" '"disk":{"free":' "$(curl -s $B/api/admin/stats "${A[@]}")"
 # push the reserve above whatever is actually free, so the guard must trip

@@ -69,6 +69,27 @@ CREATE TABLE IF NOT EXISTS webhook_log (
   time     INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_wlog_time ON webhook_log(time);
+-- Server-side keys that must never leave the box. Kept out of "settings" so
+-- they cannot ride along in the admin settings payload or be overwritten by it.
+CREATE TABLE IF NOT EXISTS secrets (
+  key   TEXT PRIMARY KEY,
+  value TEXT NOT NULL
+);
+-- Share links: the access control behind "protected" visibility.
+CREATE TABLE IF NOT EXISTS shares (
+  token     TEXT PRIMARY KEY,
+  name      TEXT NOT NULL,                 -- videos.name
+  user_id   INTEGER NOT NULL DEFAULT 0,    -- who issued it
+  pass_hash TEXT NOT NULL DEFAULT '',      -- '' = no password
+  salt      TEXT NOT NULL DEFAULT '',
+  expires   INTEGER NOT NULL DEFAULT 0,    -- epoch ms, 0 = never
+  max_views INTEGER NOT NULL DEFAULT 0,    -- 0 = unlimited
+  views     INTEGER NOT NULL DEFAULT 0,
+  note      TEXT NOT NULL DEFAULT '',
+  last_seen INTEGER NOT NULL DEFAULT 0,
+  created   TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_shares_name ON shares(name);
 -- Resumable uploads in progress. Bytes live in DATA_DIR/tmp/.part-<id>.
 CREATE TABLE IF NOT EXISTS uploads (
   id        TEXT PRIMARY KEY,

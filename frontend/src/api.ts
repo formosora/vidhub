@@ -17,7 +17,23 @@ export interface PublicConf {
   [k: string]: unknown
 }
 
-export type Visibility = 'public' | 'private'
+/**
+ * public    — listed in the gallery
+ * private   — unlisted, but the direct link still plays
+ * protected — no direct link works; reachable only through a share link
+ */
+export type Visibility = 'public' | 'private' | 'protected'
+
+/** One share link onto a `protected` file. Never carries the password itself. */
+export interface Share {
+  token: string; name: string; url: string; embed: string
+  has_password: boolean
+  expires: number          // epoch ms, 0 = never
+  max_views: number        // 0 = unlimited
+  views: number
+  note: string; created: string; last_seen: number
+  state: 'ok' | 'expired' | 'exhausted' | string
+}
 
 export interface Me {
   id: number; username: string; role: 'admin' | 'uploader'
