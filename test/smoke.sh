@@ -215,6 +215,22 @@ ck "others cannot revoke" "403" "$(curl -s -o/dev/null -w '%{http_code}' -X DELE
 ck "purge kills the links" "404" "$(curl -s -X DELETE "$B/api/videos/$PN/force" "${A[@]}" -o/dev/null
   curl -s -o/dev/null -w '%{http_code}' $B/s/$STOK)"
 
+# Guessing a share password must run out — this is the one password prompt on
+# the site an anonymous caller can hammer. Kept last in this block: it burns the
+# per-IP failure budget, which every later share-password assertion would share.
+head -c 60000 /dev/urandom > brute.mp4
+BN=$(curl -s -X POST "$B/api/videos?name=brute.mp4" "${A[@]}" --data-binary @brute.mp4 | sed 's/.*"name":"\([^"]*\)".*/\1/')
+curl -s -X PATCH "$B/api/videos/$BN" "${A[@]}" -H 'Content-Type: application/json' -d '{"visibility":"protected"}' -o/dev/null
+BTOK=$(curl -s -X POST "$B/api/videos/$BN/shares" "${A[@]}" -H 'Content-Type: application/json' -d '{"password":"1234"}' | sed 's/.*"token":"\([^"]*\)".*/\1/')
+BRUTE=""
+for i in $(seq 1 40); do
+  code=$(curl -s -o/dev/null -w '%{http_code}' -X POST $B/s/$BTOK -d "password=guess$i")
+  [ "$code" = "429" ] && { BRUTE="$i"; break; }
+done
+ck "share password brute force is cut off" "yes" "$([ -n "$BRUTE" ] && echo yes)"
+ck "and not on the very first try" "yes" "$([ "${BRUTE:-0}" -gt 5 ] && echo yes)"
+ck "throttle outlasts a correct guess" "429" "$(curl -s -o/dev/null -w '%{http_code}' -X POST $B/s/$BTOK -d 'password=1234')"
+
 echo "== disk guard =="
 ck "admin sees real disk figures" '"disk":{"free":' "$(curl -s $B/api/admin/stats "${A[@]}")"
 # push the reserve above whatever is actually free, so the guard must trip

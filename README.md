@@ -169,7 +169,7 @@ DATA_DIR=/tmp/vh-test PORT=8098 ADMIN_PASSWORD=TestPass123 node server/server.js
 BASE=http://localhost:8098 ADMIN_PASSWORD=TestPass123 bash test/smoke.sh
 ```
 
-`test/smoke.sh` — 227 assertions, no ffmpeg required. Covers registration and the
+`test/smoke.sh` — 230 assertions, no ffmpeg required. Covers registration and the
 CAPTCHA, visibility and gallery filtering, share-link formats, the bilingual API,
 uploads that must not be executable, the last administrator that must not be
 lockable, public endpoints that must not leak IPs, settings clamping, quarantined
@@ -293,6 +293,11 @@ link can carry:
 | Expiry | 1 hour to 30 days, or never |
 | View limit | One viewer counts once per hour, so a reload does not burn a view |
 | Revocation | Immediate, per link — the others keep working |
+
+Wrong password guesses are budgeted **per link** rather than per IP: rotating
+addresses buys an attacker no fresh attempts, and one person fumbling a link
+cannot lock their colleagues out of every other one. Only failures count.
+
 
 ```bash
 curl -X POST http://localhost:8081/api/videos/<name>/shares \

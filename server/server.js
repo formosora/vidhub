@@ -19,6 +19,7 @@ import {
   mintGrant, verifyGrant, countShareView, sweepShares,
 } from './lib/shares.js'
 import { leechBlocked } from './lib/security.js'
+import { sharePwThrottled, noteSharePwFail } from './lib/auth.js'
 import { send, clientIp, readBody } from './lib/util.js'
 import { t, lang } from './lib/i18n.js'
 import { hasFfmpeg } from './lib/media.js'
@@ -211,9 +212,13 @@ http.createServer(async (req, res) => {
       const grantFor = () => mintGrant(s.name, s.expires)
 
       if (req.method === 'POST') {                    // unlock form submission
+        if (sharePwThrottled(token))
+          return html(429, gonePage('share.throttled', L))
         const form = new URLSearchParams(await readBody(req, 4096).catch(() => ''))
-        if (!checkSharePassword(s, form.get('password')))
+        if (!checkSharePassword(s, form.get('password'))) {
+          noteSharePwFail(token)
           return html(401, unlockPage(token, L, { error: 'share.wrongPassword' }))
+        }
         // Redirect so the password leaves the request body behind and a reload
         // (or a copied URL) keeps working until the grant lapses.
         res.writeHead(302, { ...BASE_HEADERS, Location: `/s/${token}?k=${encodeURIComponent(grantFor())}` })

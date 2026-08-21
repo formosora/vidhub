@@ -80,6 +80,7 @@ const M = {
   'share.expired':         ['分享链接已过期', 'This share link has expired'],
   'share.exhausted':       ['分享链接的播放次数已用完', 'This share link has run out of views'],
   'share.wrongPassword':   ['口令错误', 'Wrong password'],
+  'share.throttled':       ['口令尝试过于频繁，请稍后再试', 'Too many password attempts — please try again later'],
   'share.needsProtected':  ['该文件的可见性不是「仅限分享链接」，直链本来就能访问，无需分享链接',
                             'This file is not set to link-only, so its direct URL already works — a share link adds nothing'],
   'share.tooMany':         ['该文件的分享链接过多，请先撤销一些', 'Too many share links on this file — revoke some first'],

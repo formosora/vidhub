@@ -159,7 +159,7 @@ DATA_DIR=/tmp/vh-test PORT=8098 ADMIN_PASSWORD=TestPass123 node server/server.js
 BASE=http://localhost:8098 ADMIN_PASSWORD=TestPass123 bash test/smoke.sh
 ```
 
-`test/smoke.sh`（227 条断言，不需要 ffmpeg）——注册开关与验证码、可见性与广场过滤、
+`test/smoke.sh`（230 条断言，不需要 ffmpeg）——注册开关与验证码、可见性与广场过滤、
 分享链接格式、双语 API、上传内容不可执行、最后一个管理员不可锁死、公开接口不泄露
 IP、设置项越界钳制、隔离内容不可重传、配额与防盗链、越权边界、Range/路径穿越。
 
@@ -259,6 +259,10 @@ node --test test/captcha.test.mjs
 | 有效期 | 1 小时到 30 天，或永不过期 |
 | 播放次数上限 | 同一访问者 1 小时内只计 1 次，刷新页面不会消耗次数 |
 | 撤销 | 立即生效，且只影响这一条，其余链接照常 |
+
+口令猜测次数是**按链接**而不是按 IP 计的：攻击者换 IP 拿不到新的额度，而某个人
+把一条链接的口令敲错，也不会把同事挡在其它所有链接之外。只有失败才计数。
+
 
 ```bash
 curl -X POST http://localhost:8081/api/videos/<name>/shares \

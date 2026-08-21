@@ -143,6 +143,20 @@ export const noteRegistered = ip => bump('register-ok', ip)
 /** Issuing challenges is cheap but not free — keep one IP from churning the store. */
 export const captchaThrottled = ip => bump('captcha', ip) > 60
 
+/**
+ * Share-link passwords — the one password prompt on the site an anonymous
+ * caller can reach, so without a budget it could be hammered indefinitely.
+ *
+ * Counted per *token* rather than per IP, because the token is the thing being
+ * protected: an attacker who rotates through addresses gets no fresh budget,
+ * and one person fat-fingering a link cannot lock their whole office out of
+ * every other link. Only failures count, so opening a link you know the
+ * password to never costs anything.
+ */
+const SHARE_PW_TRIES = 30
+export const sharePwThrottled = token => peek('share-pw', token) >= SHARE_PW_TRIES
+export const noteSharePwFail = token => bump('share-pw', token)
+
 // ---------- request identity ----------
 
 /**
