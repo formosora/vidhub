@@ -116,6 +116,59 @@ export function unlockPage(token, locale = 'zh', { error = '' } = {}) {
 </form></div>`, GATE_CSS)
 }
 
+/**
+ * A collection: the first playable item up top, the rest as a clickable strip
+ * beneath it. Rendered server-side like the player page so it can be embedded
+ * and shared without the SPA.
+ */
+export function collectionPage(c, items, locale = 'zh', active = 0) {
+  const L = locale
+  const cur = items[active] || items[0]
+  const notice = conf('notice_status') ? `<div class="notice">${conf('notice')}</div>` : ''
+  const media = !cur
+    ? `<p class="cempty">${t(L, 'coll.empty')}</p>`
+    : cur.kind === 'image'
+      ? `<img src="/v/${cur.name}" alt="${esc(cur.orig || cur.name)}" style="max-width:100%;max-height:70vh;border-radius:12px">`
+      : `<video src="/v/${cur.name}" poster="/t/${cur.name}" controls playsinline
+          style="max-width:100%;max-height:70vh;outline:none;border-radius:12px;box-shadow:0 20px 60px #000a"></video>`
+
+  // A thumbnail can legitimately be absent (pipeline still running, or ffmpeg
+  // unavailable). Hide the broken image rather than showing a torn tile — the
+  // filename underneath still identifies the entry.
+  const strip = items.map((v, i) => `<a class="citem${i === active ? ' on' : ''}" href="/c/${c.id}?i=${i}">
+    <img src="/t/${v.name}" alt="" loading="lazy" onerror="this.style.visibility='hidden'">
+    <span>${esc(v.orig || v.name)}</span>
+  </a>`).join('')
+
+  const meta = `<meta name="description" content="${esc(c.descr || conf('description'))}">
+<meta property="og:title" content="${esc(c.title)}">
+${cur ? `<meta property="og:image" content="/t/${cur.name}">` : ''}
+${c.visibility === 'public' ? '' : '<meta name="robots" content="noindex">'}`
+
+  return shell(`${esc(c.title)} · ${esc(conf('title'))}`, { lang: t(L, 'p.htmlLang'), meta }, `<div class="wrap">
+  <h1>📚 ${esc(c.title)}</h1>
+  ${c.descr ? `<p class="cdesc">${esc(c.descr)}</p>` : ''}
+  <div class="stage">${media}</div>
+  ${cur ? `<div class="meta"><span>${esc(cur.orig || cur.name)}</span><span>${t(L, 'p.views', cur.views)}</span></div>` : ''}
+  <div class="cstrip">${strip}</div>
+  ${notice}
+  <footer>${t(L, 'p.poweredBy', `<a href="/">${esc(conf('title'))}</a>`)}</footer>
+</div>`, COLL_CSS)
+}
+
+const COLL_CSS = `
+  body{justify-content:flex-start;padding-top:34px}
+  .cdesc{margin:-6px 0 14px;font-size:.84rem;color:#8b93a7;white-space:pre-wrap}
+  .cempty{margin:38px 0;color:#8b93a7;font-size:.9rem}
+  .cstrip{display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:10px;margin-top:16px}
+  .citem{display:block;border-radius:10px;overflow:hidden;background:#0006;border:1px solid #ffffff12;
+    text-decoration:none;transition:border-color .15s}
+  .citem:hover{border-color:#7ea2ff66}
+  .citem.on{border-color:#7ea2ff}
+  .citem img{display:block;width:100%;aspect-ratio:16/9;object-fit:cover;background:#0b0e17}
+  .citem span{display:block;padding:7px 9px;font-size:.74rem;color:#c9d2e4;
+    overflow:hidden;text-overflow:ellipsis;white-space:nowrap}`
+
 /** Expired, used up, or revoked — a dead end that says which. */
 export function gonePage(reasonKey, locale = 'zh') {
   const L = locale

@@ -396,7 +396,7 @@ export async function storeUpload({ tmp, up, orig, ext, kind, vis, user, ip, reg
         meta.width, meta.height, meta.duration || 0, name)
     }
     if (conf('thumbnail') && kind === 'video')
-      await media.makeThumb(dest, thumbPath(name), conf('thumbnail_w')).catch(() => {})
+      await media.makeThumb(dest, thumbPath(name), conf('thumbnail_w'), meta?.duration || 0).catch(() => {})
     else if (conf('thumbnail') && kind === 'image')
       await media.makeImageThumb(dest, thumbPath(name), conf('thumbnail_w')).catch(() => {})
   }

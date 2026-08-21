@@ -10,12 +10,14 @@ const q = ref('')
 const pageNum = ref(1)
 const total = ref(0)
 const size = 24
+/** Newest first by default; "most viewed" is the other one visitors reach for. */
+const sort = ref('uploaded')
 
 async function load() {
   loading.value = true
   errKey.value = ''
   try {
-    const res = await fetch(`/api/public/videos?page=${pageNum.value}&size=${size}&q=${encodeURIComponent(q.value)}`,
+    const res = await fetch(`/api/public/videos?page=${pageNum.value}&size=${size}&q=${encodeURIComponent(q.value)}&sort=${sort.value}&order=desc`,
       { headers: langHeader() })
     // Without this the 403 body fell through to `j.items || []` and the page
     // claimed "nothing here yet" when the gallery was simply switched off.
@@ -28,6 +30,7 @@ async function load() {
 
 let debounce: number | undefined
 watch(q, () => { clearTimeout(debounce); debounce = window.setTimeout(() => { pageNum.value = 1; load() }, 350) })
+watch(sort, () => { pageNum.value = 1; load() })
 watch(pageNum, load)
 watch(locale, load)          // server-side messages depend on the language
 onMounted(load)
@@ -41,6 +44,13 @@ const pages = () => Math.max(1, Math.ceil(total.value / size))
       <h1 style="margin:0">{{ t('exp.title') }}</h1>
       <span class="grow"></span>
       <input v-model="q" :placeholder="t('exp.searchPlaceholder')" style="background:rgba(0,0,0,.28);border:1px solid var(--glass-border);color:var(--text);border-radius:10px;padding:.5rem .8rem;outline:none" />
+      <select v-model="sort" :title="t('sort.label')"
+              style="background:rgba(0,0,0,.28);border:1px solid var(--glass-border);color:var(--text);border-radius:10px;padding:.5rem .6rem;outline:none;font-size:.84rem">
+        <option value="uploaded">{{ t('sort.uploaded') }}</option>
+        <option value="views">{{ t('sort.views') }}</option>
+        <option value="size">{{ t('sort.size') }}</option>
+        <option value="duration">{{ t('sort.duration') }}</option>
+      </select>
     </div>
 
     <p v-if="loading" class="muted">{{ t('c.loading') }}</p>

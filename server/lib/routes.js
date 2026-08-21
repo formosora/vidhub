@@ -22,6 +22,12 @@ import { t, lang, AppError } from './i18n.js'
 import { EVENTS, checkTarget, deliverTest, emit } from './webhooks.js'
 import { listBackups, backupPath, removeBackup, runBackup, backupStatus } from './backup.js'
 import { createShare, sharesFor, getShare, revokeShare, dropSharesFor, shareOut } from './shares.js'
+import {
+  listTags, ensureTag, tagsOf, tagVideo, untagVideo, deleteTag, renameTag, dropTagsFor,
+  collectionsOf, getCollection, createCollection, updateCollection, deleteCollection,
+  addToCollection, removeFromCollection, reorderCollection, collectionItems,
+  dropCollectionRefs, collectionOut,
+} from './organize.js'
 import { unlinkSync, statSync, createReadStream } from 'node:fs'
 
 const tokenOf = req => (req.headers.authorization || '').replace(/^Bearer\s+/i, '')
@@ -44,6 +50,7 @@ const publicVideoOut = v => ({
 const videoOut = v => ({
   ...publicVideoOut(v),
   visibility: v.visibility || 'public',
+  tags: tagsOf(v.name),
   mod_score: v.mod_score, username: v.username, ip: v.ip, ip_region: v.ip_region,
 })
 
@@ -61,6 +68,28 @@ const asVisibility = v => (VISIBILITIES.includes(v) ? v : null)
 
 /** One file does not need dozens of live links; a runaway loop should not make them. */
 const MAX_SHARES_PER_VIDEO = 50
+
+/**
+ * Sort keys are resolved through this table rather than interpolated: the value
+ * arrives in a query string and lands in an ORDER BY, which is the one place
+ * parameter binding cannot protect us.
+ */
+const SORTS = {
+  uploaded: 'uploaded',
+  size: 'size',
+  duration: 'duration',
+  views: 'views',
+  name: 'orig',
+}
+function orderBy(url, fallback = 'uploaded') {
+  const col = SORTS[url.searchParams.get('sort')] || SORTS[fallback]
+  const dir = url.searchParams.get('order') === 'asc' ? 'ASC' : 'DESC'
+  // A stable tiebreaker, or paging through equal sizes silently repeats rows.
+  return `${col} ${dir}, name ASC`
+}
+
+/** How many names one bulk call may touch. */
+const MAX_BULK = 200
 
 export async function handleApi(req, res, path, url) {
   const ip = clientIp(req)
@@ -161,7 +190,7 @@ export async function handleApi(req, res, path, url) {
     if (kw !== '%%') { conds.push('orig LIKE ?'); args.push(kw) }
     const where = conds.join(' AND ')
     const total = q.get(`SELECT COUNT(*) c FROM videos WHERE ${where}`, ...args).c
-    const rows = q.all(`SELECT * FROM videos WHERE ${where} ORDER BY uploaded DESC LIMIT ? OFFSET ?`, ...args, size, off)
+    const rows = q.all(`SELECT * FROM videos WHERE ${where} ORDER BY ${orderBy(url)} LIMIT ? OFFSET ?`, ...args, size, off)
     return send(res, 200, { total, items: rows.map(publicVideoOut) })
   }
 
@@ -246,18 +275,80 @@ export async function handleApi(req, res, path, url) {
     const showAll = isAdmin(user) && url.searchParams.get('all') === '1'
     const status = url.searchParams.get('status') || ''
     const vis = asVisibility(url.searchParams.get('visibility'))
+    const tagId = Number(url.searchParams.get('tag')) || 0
     const conds = ["status != 'recycled'"], args = []
     if (!showAll) { conds.push('user_id = ?'); args.push(user.id) }
     if (kw !== '%%') { conds.push('orig LIKE ?'); args.push(kw) }
     if (status) { conds.push('status = ?'); args.push(status) }
     if (vis) { conds.push('visibility = ?'); args.push(vis) }
+    // Filtering by a tag you do not own must not leak whose files carry it.
+    if (tagId && q.get('SELECT COUNT(*) c FROM tags WHERE id = ? AND user_id = ?', tagId, user.id).c) {
+      conds.push('name IN (SELECT video FROM video_tags WHERE tag_id = ?)')
+      args.push(tagId)
+    }
     const where = conds.join(' AND ')
     const total = q.get(`SELECT COUNT(*) c FROM videos WHERE ${where}`, ...args).c
-    const rows = q.all(`SELECT * FROM videos WHERE ${where} ORDER BY uploaded DESC LIMIT ? OFFSET ?`, ...args, size, off)
+    const rows = q.all(`SELECT * FROM videos WHERE ${where} ORDER BY ${orderBy(url)} LIMIT ? OFFSET ?`, ...args, size, off)
     return send(res, 200, { total, items: rows.map(videoOut) })
   }
 
-  const vm = path.match(/^\/api\/videos\/([\w.-]+)(\/(restore|force|ban|unban|shares))?$/)
+  /**
+   * One action over many files. Every name is authorised on its own and the
+   * result reports per-name outcomes, so a selection that happens to include
+   * someone else's file does the part it may and says what it skipped, rather
+   * than failing the whole batch or quietly doing it anyway.
+   */
+  if (path === '/api/videos/bulk' && req.method === 'POST') {
+    if (!user) return fail(401, 'auth.unauthorized')
+    if (!hasScope(user, 'manage')) return fail(403, 'key.scopeMissing')
+    const b = await readJson(req)
+    const names = Array.isArray(b.names) ? b.names.slice(0, MAX_BULK).map(String) : []
+    const action = String(b.action || '')
+    if (!names.length) return fail(400, 'bulk.noSelection')
+
+    const vis = action === 'visibility' ? asVisibility(b.visibility) : null
+    if (action === 'visibility' && !vis) return fail(400, 'c.badVisibility')
+
+    let tag = null
+    if (action === 'tag' || action === 'untag') {
+      tag = action === 'tag'
+        ? ensureTag(user.id, b.tag)
+        : q.get('SELECT * FROM tags WHERE id = ? AND user_id = ?', Number(b.tag) || 0, user.id)
+      if (!tag) return fail(400, 'tag.bad')
+    }
+
+    const done = [], skipped = []
+    for (const name of names) {
+      const v = q.get('SELECT * FROM videos WHERE name = ?', name)
+      if (!v || (v.user_id !== user.id && !isAdmin(user))) { skipped.push(name); continue }
+      switch (action) {
+        case 'delete':
+          q.run("UPDATE videos SET status='recycled' WHERE name=?", name); break
+        case 'restore':
+          q.run("UPDATE videos SET status='ok' WHERE name=?", name); break
+        case 'force': {
+          const f = findFile(v); if (f) try { unlinkSync(f) } catch {}
+          try { unlinkSync(thumbPath(name)) } catch {}
+          q.run('DELETE FROM videos WHERE name=?', name)
+          dropSharesFor(name); dropTagsFor(name); dropCollectionRefs(name)
+          emit('video.deleted', { name, orig: v.orig, size: v.size, username: v.username, by: user.username })
+          break
+        }
+        case 'visibility':
+          q.run('UPDATE videos SET visibility=? WHERE name=?', vis, name); break
+        case 'tag':
+          tagVideo(name, tag.id); break
+        case 'untag':
+          untagVideo(name, tag.id); break
+        default:
+          return fail(400, 'bulk.badAction')
+      }
+      done.push(name)
+    }
+    return send(res, 200, { ok: true, action, done: done.length, skipped: skipped.length, skippedNames: skipped })
+  }
+
+  const vm = path.match(/^\/api\/videos\/([\w.-]+)(\/(restore|force|ban|unban|shares|tags))?$/)
   if (vm) {
     const [, name, , action] = vm
     const v = q.get('SELECT * FROM videos WHERE name = ?', name)
@@ -295,7 +386,7 @@ export async function handleApi(req, res, path, url) {
       const f = findFile(v); if (f) try { unlinkSync(f) } catch {}
       try { unlinkSync(thumbPath(name)) } catch {}
       q.run('DELETE FROM videos WHERE name=?', name)
-      dropSharesFor(name)
+      dropSharesFor(name); dropTagsFor(name); dropCollectionRefs(name)
       emit('video.deleted', { name, orig: v.orig, size: v.size, username: v.username, by: user.username })
       return send(res, 200, { ok: true })
     }
@@ -303,6 +394,20 @@ export async function handleApi(req, res, path, url) {
       if (!isAdminSession(user)) return fail(403, 'auth.forbidden')
       q.run('UPDATE videos SET status=? WHERE name=?', action === 'ban' ? 'banned' : 'ok', name)
       return send(res, 200, { ok: true })
+    }
+
+    // ---------- tags on one file ----------
+    if (action === 'tags' && (req.method === 'POST' || req.method === 'DELETE')) {
+      if (!canWrite) return fail(403, mayManage ? 'key.scopeMissing' : 'auth.forbidden')
+      const b = await readJson(req)
+      if (req.method === 'POST') {
+        const tg = ensureTag(user.id, b.name)
+        if (!tg) return fail(400, 'tag.bad')
+        if (!tagVideo(name, tg.id)) return fail(400, 'tag.bad')
+      } else {
+        untagVideo(name, Number(b.id) || 0)
+      }
+      return send(res, 200, { ok: true, tags: tagsOf(name) })
     }
 
     // ---------- share links ----------
@@ -336,6 +441,95 @@ export async function handleApi(req, res, path, url) {
     }
   }
 
+  // ---------- tags ----------
+  if (path === '/api/tags' && req.method === 'GET') {
+    if (!user) return fail(401, 'auth.unauthorized')
+    if (!hasScope(user, 'read')) return fail(403, 'key.scopeMissing')
+    return send(res, 200, { items: listTags(user.id) })
+  }
+  if (path === '/api/tags' && req.method === 'POST') {
+    if (!user) return fail(401, 'auth.unauthorized')
+    if (!hasScope(user, 'manage')) return fail(403, 'key.scopeMissing')
+    const b = await readJson(req)
+    const tg = ensureTag(user.id, b.name)
+    return tg ? send(res, 200, tg) : fail(400, 'tag.bad')
+  }
+  const tm = path.match(/^\/api\/tags\/(\d+)$/)
+  if (tm) {
+    if (!user) return fail(401, 'auth.unauthorized')
+    if (!hasScope(user, 'manage')) return fail(403, 'key.scopeMissing')
+    const id = Number(tm[1])
+    if (req.method === 'PATCH') {
+      const tg = renameTag(user.id, id, (await readJson(req)).name)
+      return tg ? send(res, 200, tg) : fail(400, 'tag.bad')
+    }
+    if (req.method === 'DELETE')
+      return deleteTag(user.id, id) ? send(res, 200, { ok: true }) : fail(404, 'tag.notFound')
+  }
+
+  // ---------- collections ----------
+  if (path === '/api/collections' && req.method === 'GET') {
+    if (!user) return fail(401, 'auth.unauthorized')
+    if (!hasScope(user, 'read')) return fail(403, 'key.scopeMissing')
+    return send(res, 200, { items: collectionsOf(user.id).map(c => collectionOut(c)) })
+  }
+  if (path === '/api/collections' && req.method === 'POST') {
+    if (!user) return fail(401, 'auth.unauthorized')
+    if (!hasScope(user, 'manage')) return fail(403, 'key.scopeMissing')
+    const b = await readJson(req)
+    if (!String(b.title || '').trim()) return fail(400, 'coll.needTitle')
+    const c = createCollection({
+      userId: user.id, username: user.username,
+      title: b.title, descr: b.descr, visibility: b.visibility,
+    })
+    return send(res, 200, collectionOut(c, 0))
+  }
+  const cm = path.match(/^\/api\/collections\/(\d+)(\/(items|order))?$/)
+  if (cm) {
+    if (!user) return fail(401, 'auth.unauthorized')
+    const c = getCollection(cm[1])
+    if (!c) return fail(404, 'coll.notFound')
+    if (c.user_id !== user.id && !isAdmin(user)) return fail(403, 'auth.forbidden')
+    const sub = cm[3]
+    const mayWrite = hasScope(user, 'manage')
+
+    if (req.method === 'GET' && !sub) {
+      if (!hasScope(user, 'read')) return fail(403, 'key.scopeMissing')
+      const items = collectionItems(c.id)
+      return send(res, 200, { ...collectionOut(c, items.length), items: items.map(videoOut) })
+    }
+    if (req.method === 'PATCH' && !sub) {
+      if (!mayWrite) return fail(403, 'key.scopeMissing')
+      return send(res, 200, collectionOut(updateCollection(c.id, await readJson(req))))
+    }
+    if (req.method === 'DELETE' && !sub) {
+      if (!mayWrite) return fail(403, 'key.scopeMissing')
+      return send(res, 200, { ok: deleteCollection(c.id) })
+    }
+    if (sub === 'items' && (req.method === 'POST' || req.method === 'DELETE')) {
+      if (!mayWrite) return fail(403, 'key.scopeMissing')
+      const b = await readJson(req)
+      const names = Array.isArray(b.names) ? b.names.slice(0, MAX_BULK).map(String) : []
+      let n = 0
+      for (const name of names) {
+        // Only your own files, so a collection cannot be used to re-publish
+        // someone else's private upload under your name.
+        const v = q.get('SELECT user_id FROM videos WHERE name = ?', name)
+        if (!v || (v.user_id !== user.id && !isAdmin(user))) continue
+        if (req.method === 'POST') addToCollection(c.id, name)
+        else removeFromCollection(c.id, name)
+        n++
+      }
+      return send(res, 200, { ok: true, changed: n })
+    }
+    if (sub === 'order' && req.method === 'POST') {
+      if (!mayWrite) return fail(403, 'key.scopeMissing')
+      const b = await readJson(req)
+      reorderCollection(c.id, Array.isArray(b.names) ? b.names.slice(0, MAX_BULK).map(String) : [])
+      return send(res, 200, { ok: true })
+    }
+  }
+
   /** Revoking is immediate — the whole point of a link you can take back. */
   const sm = path.match(/^\/api\/shares\/([a-f0-9]{32})$/)
   if (sm && req.method === 'DELETE') {
@@ -363,7 +557,7 @@ export async function handleApi(req, res, path, url) {
     if (!showAll) { conds.push('user_id = ?'); args.push(user.id) }
     const where = conds.join(' AND ')
     const total = q.get(`SELECT COUNT(*) c FROM videos WHERE ${where}`, ...args).c
-    const rows = q.all(`SELECT * FROM videos WHERE ${where} ORDER BY uploaded DESC LIMIT ? OFFSET ?`, ...args, size, off)
+    const rows = q.all(`SELECT * FROM videos WHERE ${where} ORDER BY ${orderBy(url)} LIMIT ? OFFSET ?`, ...args, size, off)
     return send(res, 200, { total, scope: showAll ? 'site' : 'own', items: rows.map(videoOut) })
   }
 
@@ -381,7 +575,7 @@ export async function handleApi(req, res, path, url) {
       if (f) { try { freed += statSync(f).size } catch {} try { unlinkSync(f) } catch {} }
       try { unlinkSync(thumbPath(v.name)) } catch {}
       q.run('DELETE FROM videos WHERE name=?', v.name)
-      dropSharesFor(v.name)
+      dropSharesFor(v.name); dropTagsFor(v.name); dropCollectionRefs(v.name)
       purged++
     }
     return send(res, 200, { ok: true, purged, freed })

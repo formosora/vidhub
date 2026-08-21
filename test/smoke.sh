@@ -130,6 +130,94 @@ ck "per-user session cap enforced" "yes" "$CAPHIT"
 for id in $SIDS; do curl -s -X DELETE "$B/api/uploads/$id" "${NT[@]}" -o/dev/null; done
 ck "reopen after cancelling" '"offset":0' "$(curl -s -X POST $B/api/uploads "${NT[@]}" -H 'Content-Type: application/json' -d '{"name":"s.mp4","size":1000}')"
 
+echo "== sorting =="
+head -c 30000 /dev/urandom > s1.mp4; head -c 90000 /dev/urandom > s2.mp4; head -c 60000 /dev/urandom > s3.mp4
+for f in s1 s2 s3; do curl -s -X POST "$B/api/videos?name=$f.mp4" "${A[@]}" --data-binary @$f.mp4 -o/dev/null; done
+SASC=$(curl -s "$B/api/videos?sort=size&order=asc&size=60" "${A[@]}" | grep -o '"size":[0-9]*' | head -3 | tr '\n' ' ')
+SDESC=$(curl -s "$B/api/videos?sort=size&order=desc&size=60" "${A[@]}" | grep -o '"size":[0-9]*' | head -3 | tr '\n' ' ')
+ck "size ascending"  "yes" "$(node -e "
+const a='$SASC'.match(/\d+/g).map(Number)
+console.log(a.every((v,i)=>i===0||a[i-1]<=v)?'yes':'no')")"
+ck "size descending" "yes" "$(node -e "
+const a='$SDESC'.match(/\d+/g).map(Number)
+console.log(a.every((v,i)=>i===0||a[i-1]>=v)?'yes':'no')")"
+# ORDER BY cannot be parameterised, so an unknown key must fall back, not interpolate
+ck "unknown sort falls back" '"total"' "$(curl -s "$B/api/videos?sort=size%3BDROP+TABLE+videos--" "${A[@]}")"
+ck "database survived it" '"total"' "$(curl -s "$B/api/videos?size=1" "${A[@]}")"
+ck "gallery sorts too" '"total"' "$(curl -s "$B/api/public/videos?sort=views&order=desc")"
+ck "recycle sorts too" '"total"' "$(curl -s "$B/api/recycle?sort=size" "${A[@]}")"
+
+echo "== tags =="
+ck "no tags yet"        '"items":[]' "$(curl -s $B/api/tags "${NT[@]}")"
+TAGV=$(curl -s "$B/api/videos?sort=name&order=asc&size=60" "${A[@]}" | grep -o '"name":"[^"]*"' | head -1 | sed 's/.*:"//;s/"//')
+ck "tag a file"         '"name":"alpha"' "$(curl -s -X POST "$B/api/videos/$TAGV/tags" "${A[@]}" -H 'Content-Type: application/json' -d '{"name":"  alpha  "}')"
+ck "whitespace trimmed" '"name":"alpha"' "$(curl -s $B/api/tags "${A[@]}")"
+ck "empty name refused" "tag.bad" "$(curl -s -X POST $B/api/tags "${A[@]}" -H 'Content-Type: application/json' -d '{"name":"   "}')"
+TAGID=$(curl -s $B/api/tags "${A[@]}" | sed 's/.*"id":\([0-9]*\).*/\1/')
+ck "filter by tag"      '"total":1' "$(curl -s "$B/api/videos?tag=$TAGID" "${A[@]}")"
+ck "tag counts files"   '"n":1' "$(curl -s $B/api/tags "${A[@]}")"
+ck "re-tagging is idempotent" "1" "$(curl -s -X POST "$B/api/videos/$TAGV/tags" "${A[@]}" -H 'Content-Type: application/json' -d '{"name":"alpha"}' | grep -o '"name":"alpha"' | wc -l | tr -d ' ')"
+# rename onto an existing name merges rather than failing the unique index
+curl -s -X POST $B/api/tags "${A[@]}" -H 'Content-Type: application/json' -d '{"name":"beta"}' -o/dev/null
+BETA=$(curl -s $B/api/tags "${A[@]}" | grep -o '"id":[0-9]*,"name":"beta"' | grep -o '[0-9]\+')
+ck "rename merges"      '"name":"alpha"' "$(curl -s -X PATCH "$B/api/tags/$BETA" "${A[@]}" -H 'Content-Type: application/json' -d '{"name":"alpha"}')"
+ck "merged away"        "1" "$(curl -s $B/api/tags "${A[@]}" | grep -o '"id"' | wc -l | tr -d ' ')"
+ck "tags are per-owner" '"items":[]' "$(curl -s $B/api/tags "${NT[@]}")"
+ck "cannot filter by someone else's tag" '"total"' "$(curl -s "$B/api/videos?tag=$TAGID" "${NT[@]}")"
+ck "untag"              '"tags":[]' "$(curl -s -X DELETE "$B/api/videos/$TAGV/tags" "${A[@]}" -H 'Content-Type: application/json' -d "{\"id\":$TAGID}")"
+ck "delete tag"         '"ok":true' "$(curl -s -X DELETE "$B/api/tags/$TAGID" "${A[@]}")"
+ck "files survive it"   '"total"' "$(curl -s "$B/api/videos?size=1" "${A[@]}")"
+
+echo "== bulk actions =="
+B1=$(curl -s "$B/api/videos?sort=name&order=asc&size=60" "${A[@]}" | grep -o '"name":"[^"]*"' | sed 's/.*:"//;s/"//' | head -2 | tr '\n' ' ')
+BA=$(echo $B1 | cut -d' ' -f1); BB=$(echo $B1 | cut -d' ' -f2)
+ck "empty selection refused" "bulk.noSelection" "$(curl -s -X POST $B/api/videos/bulk "${A[@]}" -H 'Content-Type: application/json' -d '{"action":"delete","names":[]}')"
+ck "unknown action refused"  "bulk.badAction" "$(curl -s -X POST $B/api/videos/bulk "${A[@]}" -H 'Content-Type: application/json' -d "{\"action\":\"nuke\",\"names\":[\"$BA\"]}")"
+ck "bad visibility refused"  "c.badVisibility" "$(curl -s -X POST $B/api/videos/bulk "${A[@]}" -H 'Content-Type: application/json' -d "{\"action\":\"visibility\",\"visibility\":\"nope\",\"names\":[\"$BA\"]}")"
+ck "bulk visibility"    '"done":2' "$(curl -s -X POST $B/api/videos/bulk "${A[@]}" -H 'Content-Type: application/json' -d "{\"action\":\"visibility\",\"visibility\":\"private\",\"names\":[\"$BA\",\"$BB\"]}")"
+ck "bulk tag"           '"done":2' "$(curl -s -X POST $B/api/videos/bulk "${A[@]}" -H 'Content-Type: application/json' -d "{\"action\":\"tag\",\"tag\":\"bulk\",\"names\":[\"$BA\",\"$BB\"]}")"
+# each name is authorised on its own: unknown and other people's files are skipped, not applied
+ck "unknown names skipped" '"skipped":1' "$(curl -s -X POST $B/api/videos/bulk "${A[@]}" -H 'Content-Type: application/json' -d "{\"action\":\"delete\",\"names\":[\"$BA\",\"nope.mp4\"]}")"
+ck "others' files skipped" '"done":0' "$(curl -s -X POST $B/api/videos/bulk "${NT[@]}" -H 'Content-Type: application/json' -d "{\"action\":\"delete\",\"names\":[\"$BB\"]}")"
+ck "and left untouched"    "$BB" "$(curl -s "$B/api/videos?size=60" "${A[@]}")"
+ck "bulk restore"       '"done":1' "$(curl -s -X POST $B/api/videos/bulk "${A[@]}" -H 'Content-Type: application/json' -d "{\"action\":\"restore\",\"names\":[\"$BA\"]}")"
+
+echo "== collections =="
+ck "title required" "coll.needTitle" "$(curl -s -X POST $B/api/collections "${A[@]}" -H 'Content-Type: application/json' -d '{"title":"  "}')"
+COLL=$(curl -s -X POST $B/api/collections "${A[@]}" -H 'Content-Type: application/json' -d '{"title":"Season 1","descr":"pilots","visibility":"public"}')
+ck "created" '"title":"Season 1"' "$COLL"
+CID=$(echo "$COLL" | sed 's/.*"id":\([0-9]*\).*/\1/')
+ck "add members"    '"changed":2' "$(curl -s -X POST "$B/api/collections/$CID/items" "${A[@]}" -H 'Content-Type: application/json' -d "{\"names\":[\"$BA\",\"$BB\"]}")"
+ck "counted"        '"count":2' "$(curl -s "$B/api/collections/$CID" "${A[@]}")"
+ck "re-adding does not duplicate" '"count":2' "$(curl -s -X POST "$B/api/collections/$CID/items" "${A[@]}" -H 'Content-Type: application/json' -d "{\"names\":[\"$BA\"]}" -o/dev/null
+  curl -s "$B/api/collections/$CID" "${A[@]}")"
+ORD1=$(curl -s "$B/api/collections/$CID" "${A[@]}" | grep -o '"name":"[^"]*mp4"' | head -1)
+curl -s -X POST "$B/api/collections/$CID/order" "${A[@]}" -H 'Content-Type: application/json' -d "{\"names\":[\"$BB\",\"$BA\"]}" -o/dev/null
+ck "reorder takes effect" "$BB" "$(curl -s "$B/api/collections/$CID" "${A[@]}" | grep -o '"name":"[^"]*mp4"' | head -1)"
+# A collection must not become a way to re-publish someone else's upload: even
+# in your OWN collection, only your own files may be added.
+NCID=$(curl -s -X POST $B/api/collections "${NT[@]}" -H 'Content-Type: application/json' -d '{"title":"mine"}' | sed 's/.*"id":\([0-9]*\).*/\1/')
+ck "cannot add someone else's file" '"changed":0' "$(curl -s -X POST "$B/api/collections/$NCID/items" "${NT[@]}" -H 'Content-Type: application/json' -d "{\"names\":[\"$BA\"]}")"
+ck "their collection stays empty" '"count":0' "$(curl -s "$B/api/collections/$NCID" "${NT[@]}")"
+ck "others cannot read"   "403" "$(curl -s -o/dev/null -w '%{http_code}' "$B/api/collections/$CID" "${NT[@]}")"
+ck "others cannot edit"   "403" "$(curl -s -o/dev/null -w '%{http_code}' -X PATCH "$B/api/collections/$CID" "${NT[@]}" -H 'Content-Type: application/json' -d '{"title":"hijacked"}')"
+ck "others cannot delete" "403" "$(curl -s -o/dev/null -w '%{http_code}' -X DELETE "$B/api/collections/$CID" "${NT[@]}")"
+
+echo "== collection page =="
+ck "page renders"      "Season 1" "$(curl -s $B/c/$CID)"
+ck "page has a player" "<video" "$(curl -s $B/c/$CID)"
+ck "unknown id 404"    "404" "$(curl -s -o/dev/null -w '%{http_code}' $B/c/999999)"
+ck "out-of-range index is clamped" "200" "$(curl -s -o/dev/null -w '%{http_code}' "$B/c/$CID?i=9999")"
+# a link-only file must not become reachable just because it sits in a collection
+curl -s -X PATCH "$B/api/videos/$BB" "${A[@]}" -H 'Content-Type: application/json' -d '{"visibility":"protected"}' -o/dev/null
+ck "link-only members are omitted" "" "$(curl -s $B/c/$CID | grep -o "$BB")"
+curl -s -X PATCH "$B/api/videos/$BB" "${A[@]}" -H 'Content-Type: application/json' -d '{"visibility":"private"}' -o/dev/null
+# purging a file must not leave a dangling member
+curl -s -X DELETE "$B/api/videos/$BA/force" "${A[@]}" -o/dev/null
+ck "purged file leaves the collection" "" "$(curl -s $B/c/$CID | grep -o "$BA")"
+ck "delete collection"  '"ok":true' "$(curl -s -X DELETE "$B/api/collections/$CID" "${A[@]}")"
+ck "its page is gone"   "404" "$(curl -s -o/dev/null -w '%{http_code}' $B/c/$CID)"
+
 echo "== backups =="
 ck "status starts empty" '"items":[]' "$(curl -s $B/api/admin/backups "${A[@]}")"
 BK=$(curl -s -X POST $B/api/admin/backups "${A[@]}")

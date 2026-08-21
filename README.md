@@ -42,6 +42,9 @@ in), and an ffmpeg media pipeline — all in one Docker container.
 - Share links with an optional password, expiry and view limit — revocable one by one
 - Full English/Chinese localisation of the UI *and* the API
 - API keys (`Authorization: Bearer vh_xxx`) for third-party upload tools
+- Tags and ordered collections, each collection with its own shareable page
+- Bulk select to delete, retag, re-scope or file away many items at once
+- Sort any list by date, size, duration, views or filename
 - Recycle bin (soft delete, restore, permanent delete)
 - Scheduled database backups with retention, downloadable from the admin panel
 
@@ -88,6 +91,7 @@ Or `docker compose up -d`.
 | `GET /api/public/videos` | Gallery. Can be closed; never includes uploader IP or username |
 | `GET /v/<name>` · `/t/<name>` · `/p/<name>` · `/d/<name>` | Stream (Range/206) / thumbnail / player page / download |
 | `GET/POST /s/<token>` | Share link — player page, or the password prompt when one is set |
+| `GET /c/<id>` | Collection page — the ordered set, playable and embeddable |
 
 **Signed in**
 
@@ -98,7 +102,12 @@ Or `docker compose up -d`.
 | `GET /api/videos/<name>` | One item (owner or admin) |
 | `PATCH /api/videos/<name>` | Change visibility, `{visibility:"public"\|"private"}` |
 | `DELETE /api/videos/<name>` | Move to the recycle bin |
+| `POST /api/videos/bulk` | One action over many names; each is authorised on its own |
 | `GET/POST /api/videos/<name>/shares` | List / issue share links (link-only files) |
+| `POST/DELETE /api/videos/<name>/tags` | Attach / remove one tag |
+| `GET/POST /api/tags` · `PATCH/DELETE /api/tags/<id>` | Your tags — rename merges, delete unlinks |
+| `GET/POST /api/collections` · `PATCH/DELETE /api/collections/<id>` | Collections |
+| `POST/DELETE /api/collections/<id>/items` · `POST …/order` | Membership and ordering |
 | `DELETE /api/shares/<token>` | Revoke one share link, immediately |
 | `POST /api/videos/<name>/restore` · `DELETE …/force` | Restore / delete permanently |
 | `GET /api/recycle` | Recycle bin; admins add `all=1` for the whole site |
@@ -137,7 +146,7 @@ Or `docker compose up -d`.
 ├── server/
 │   ├── server.js   # entry point: API / media streaming / player pages / static
 │   └── lib/        # db · config · auth · security · upload · media · moderate · player
-│                   # shares · backup · webhooks · resumable · i18n · captcha
+│                   # shares · organize · backup · webhooks · resumable · i18n · captcha
 ├── test/           # smoke.sh · pipeline.sh · captcha.test.mjs
 ├── Dockerfile      # multi-stage build, single container, ffmpeg included
 └── docker-compose.yml
@@ -169,7 +178,7 @@ DATA_DIR=/tmp/vh-test PORT=8098 ADMIN_PASSWORD=TestPass123 node server/server.js
 BASE=http://localhost:8098 ADMIN_PASSWORD=TestPass123 bash test/smoke.sh
 ```
 
-`test/smoke.sh` — 230 assertions, no ffmpeg required. Covers registration and the
+`test/smoke.sh` — 278 assertions, no ffmpeg required. Covers registration and the
 CAPTCHA, visibility and gallery filtering, share-link formats, the bilingual API,
 uploads that must not be executable, the last administrator that must not be
 lockable, public endpoints that must not leak IPs, settings clamping, quarantined
@@ -349,6 +358,32 @@ docker start vidhub
 > The database holds metadata, not video bytes. Restoring it alone rolls back
 > accounts, settings and the file index — pair it with your media-directory
 > backup, or the index will reference files that are no longer on disk.
+
+## 🗂 Organising
+
+Three things beyond search, for when the library stops fitting on one screen.
+
+**Sorting.** Every list — your files, the admin list, the recycle bin, the public
+gallery — takes `?sort=uploaded|size|duration|views|name` and `?order=asc|desc`.
+Sort keys are resolved through a lookup table rather than interpolated, because
+an `ORDER BY` is the one place a bound parameter cannot protect you.
+
+**Tags.** Per-owner labels: two accounts can each have a "raw footage" and
+neither sees the other's. Renaming a tag onto an existing name *merges* into it
+rather than failing on the unique index, which is what fixing a typo actually
+means. Deleting one unlinks it everywhere and leaves the files alone.
+
+**Collections.** An ordered set with its own page at `/c/<id>`, embeddable the
+same way a player page is. Only your own files can go in one, so a collection
+cannot be used to re-publish somebody else's upload under your name — and
+link-only members are omitted from the page, since refusing direct URLs is
+exactly their purpose.
+
+**Bulk actions.** Tick several rows and delete, restore, purge, re-scope, tag or
+file them away in one call. Every name is authorised individually and the reply
+reports what was skipped, so a selection that happens to include a file you do
+not own does the part it may and tells you the rest — rather than failing the
+whole batch or quietly doing it anyway.
 
 ## 🔑 API keys
 

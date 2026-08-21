@@ -90,6 +90,39 @@ CREATE TABLE IF NOT EXISTS shares (
   created   TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_shares_name ON shares(name);
+-- Tags are per-owner: two people may both have a "raw footage" tag and neither
+-- sees the other's. Names are unique within an account, not globally.
+CREATE TABLE IF NOT EXISTS tags (
+  id      INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER NOT NULL DEFAULT 0,
+  name    TEXT NOT NULL,
+  created TEXT NOT NULL,
+  UNIQUE(user_id, name)
+);
+CREATE TABLE IF NOT EXISTS video_tags (
+  video  TEXT NOT NULL,                  -- videos.name
+  tag_id INTEGER NOT NULL REFERENCES tags(id) ON DELETE CASCADE,
+  PRIMARY KEY (video, tag_id)
+);
+CREATE INDEX IF NOT EXISTS idx_vtags_tag ON video_tags(tag_id);
+-- An ordered, shareable set of one owner's videos.
+CREATE TABLE IF NOT EXISTS collections (
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id    INTEGER NOT NULL DEFAULT 0,
+  username   TEXT NOT NULL DEFAULT '',
+  title      TEXT NOT NULL DEFAULT '',
+  descr      TEXT NOT NULL DEFAULT '',
+  visibility TEXT NOT NULL DEFAULT 'private',  -- public = listed | private = unlisted
+  created    TEXT NOT NULL,
+  updated    TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS collection_items (
+  coll_id INTEGER NOT NULL REFERENCES collections(id) ON DELETE CASCADE,
+  video   TEXT NOT NULL,                 -- videos.name
+  pos     INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (coll_id, video)
+);
+CREATE INDEX IF NOT EXISTS idx_citems_coll ON collection_items(coll_id, pos);
 -- Resumable uploads in progress. Bytes live in DATA_DIR/tmp/.part-<id>.
 CREATE TABLE IF NOT EXISTS uploads (
   id        TEXT PRIMARY KEY,

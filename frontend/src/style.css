@@ -261,3 +261,14 @@ button { font-family: inherit; cursor: pointer; }
   .tbl .hide-m { display: none; }
   .form-grid { grid-template-columns: 1fr; }
 }
+
+/* compact select used in filter/sort rows (My + Admin) */
+.mini-sel {
+  padding: .38rem .55rem;
+  border: 1px solid var(--glass-border);
+  border-radius: 8px;
+  background: rgba(0, 0, 0, .3);
+  color: var(--text);
+  font-size: .78rem;
+  outline: none;
+}

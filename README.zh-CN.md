@@ -35,6 +35,9 @@ Vue 3 管理门户 + **零 npm 依赖** Node 服务端（内置 SQLite）+ ffmpe
 - 分享链接可带口令、有效期、播放次数上限，且可单条撤销
 - 界面与 API 全量中英双语，语言跟随浏览器并可手动切换
 - API Key（`Authorization: Bearer vh_xxx`）供第三方工具上传
+- 标签与有序合集，每个合集有自己的分享页面
+- 批量勾选：一次删除、打标签、改可见性或归入合集
+- 所有列表可按时间 / 大小 / 时长 / 播放量 / 文件名排序
 - 回收站（软删除/恢复/彻底删除）
 - 数据库定时备份 + 保留策略，后台可直接下载快照
 
@@ -80,6 +83,7 @@ docker run -d --name vidhub -p 8081:8080 \
 | `GET /api/public/videos` | 广场。可关闭；不含上传者 IP/用户名 |
 | `GET /v/<name>` · `/t/<name>` · `/p/<name>` · `/d/<name>` | 视频流（Range/206）/ 缩略图 / 播放页 / 下载 |
 | `GET/POST /s/<token>` | 分享链接 —— 播放页，设了口令则先出验证表单 |
+| `GET /c/<id>` | 合集页面 —— 有序列表，可播放、可嵌入 |
 
 **登录后**
 
@@ -90,7 +94,12 @@ docker run -d --name vidhub -p 8081:8080 \
 | `GET /api/videos/<name>` | 单个详情（所有者或管理员） |
 | `PATCH /api/videos/<name>` | 改可见性 `{visibility:"public"\|"private"}` |
 | `DELETE /api/videos/<name>` | 移入回收站 |
+| `POST /api/videos/bulk` | 对多个文件执行同一操作，逐个鉴权 |
 | `GET/POST /api/videos/<name>/shares` | 列出 / 签发分享链接（仅「仅分享链接」的文件） |
+| `POST/DELETE /api/videos/<name>/tags` | 给单个文件加 / 去标签 |
+| `GET/POST /api/tags` · `PATCH/DELETE /api/tags/<id>` | 我的标签 —— 改名即合并，删除只解绑 |
+| `GET/POST /api/collections` · `PATCH/DELETE /api/collections/<id>` | 合集 |
+| `POST/DELETE /api/collections/<id>/items` · `POST …/order` | 合集成员与排序 |
 | `DELETE /api/shares/<token>` | 立即撤销某条分享链接 |
 | `POST /api/videos/<name>/restore` · `DELETE …/force` | 恢复 / 彻底删除 |
 | `GET /api/recycle` | 回收站；管理员加 `all=1` 看全站 |
@@ -129,7 +138,7 @@ docker run -d --name vidhub -p 8081:8080 \
 ├── server/
 │   ├── server.js   # 路由入口：API / 视频流 / 播放页 / 静态
 │   └── lib/        # db · config · auth · security · upload · media · moderate · player
-│                   # shares · backup · webhooks · resumable · i18n · captcha
+│                   # shares · organize · backup · webhooks · resumable · i18n · captcha
 ├── test/           # smoke.sh · pipeline.sh · captcha.test.mjs
 ├── Dockerfile      # 多阶段构建，单容器，内置 ffmpeg
 └── docker-compose.yml
@@ -159,7 +168,7 @@ DATA_DIR=/tmp/vh-test PORT=8098 ADMIN_PASSWORD=TestPass123 node server/server.js
 BASE=http://localhost:8098 ADMIN_PASSWORD=TestPass123 bash test/smoke.sh
 ```
 
-`test/smoke.sh`（230 条断言，不需要 ffmpeg）——注册开关与验证码、可见性与广场过滤、
+`test/smoke.sh`（278 条断言，不需要 ffmpeg）——注册开关与验证码、可见性与广场过滤、
 分享链接格式、双语 API、上传内容不可执行、最后一个管理员不可锁死、公开接口不泄露
 IP、设置项越界钳制、隔离内容不可重传、配额与防盗链、越权边界、Range/路径穿越。
 
@@ -306,6 +315,26 @@ docker start vidhub
 
 > 数据库里存的是元数据，不是视频本体。单独恢复它只会把账号、设置和文件索引回滚 ——
 > 请和媒体目录的备份配套使用，否则索引会指向磁盘上已经不存在的文件。
+
+## 🗂 组织
+
+搜索之外的三件事，为文件多到一屏放不下的时候准备。
+
+**排序。** 所有列表 —— 我的文件、管理端列表、回收站、公开广场 —— 都接受
+`?sort=uploaded|size|duration|views|name` 和 `?order=asc|desc`。排序字段通过白名单
+查表解析而不是拼接，因为 `ORDER BY` 恰好是参数绑定保护不到的地方。
+
+**标签。** 按所有者隔离：两个账号可以各有一个「素材」标签，互相看不见。把标签
+改成一个已存在的名字会**合并**过去，而不是撞上唯一索引报错 —— 那才是「改错别字」
+的真实含义。删除标签只解除关联，文件本身不动。
+
+**合集。** 有序的一组视频，有自己的页面 `/c/<id>`，和播放页一样可嵌入。只能放自己的
+文件，所以合集不会变成「把别人的上传挂到自己名下重新发布」的通道；而「仅分享链接」
+的成员不会出现在合集页上 —— 拒绝直链正是那一档存在的意义。
+
+**批量操作。** 勾选若干行，一次删除、恢复、彻底删除、改可见性、打标签或归入合集。
+每个文件单独鉴权，返回里会说明跳过了几个：选中的文件里混进了不属于你的，就做能做的
+部分并如实告知，而不是整批失败、更不是闷声照做。
 
 ## 🔑 API Key
 

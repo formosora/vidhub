@@ -13,7 +13,8 @@ import { handleApi } from './lib/routes.js'
 import { findFile, thumbPath, resumeJobs } from './lib/upload.js'
 import { sweepUploads } from './lib/resumable.js'
 import { startBackups } from './lib/backup.js'
-import { playerPage, unlockPage, gonePage } from './lib/player.js'
+import { playerPage, unlockPage, gonePage, collectionPage } from './lib/player.js'
+import { getCollection, collectionItems } from './lib/organize.js'
 import {
   getShare, shareBlocked, shareNeedsPassword, checkSharePassword,
   mintGrant, verifyGrant, countShareView, sweepShares,
@@ -191,6 +192,19 @@ http.createServer(async (req, res) => {
       if (v.visibility === 'protected')
         return send(res, 403, gonePage('p.needsShareLink', L), 'text/html; charset=utf-8', BASE_HEADERS)
       return send(res, 200, playerPage(v, L), 'text/html; charset=utf-8', BASE_HEADERS)
+    }
+
+    // ---- collection page (embeddable, like the player page) ----
+    if (path.startsWith('/c/')) {
+      const L = lang(req, url)
+      const c = getCollection(path.slice(3))
+      if (!c) return send(res, 404, t(L, 'coll.notFound'), 'text/plain', BASE_HEADERS)
+      const items = collectionItems(c.id)
+        // A collection is a curated list, not a way around a file's own setting:
+        // link-only members stay out, since their whole point is refusing /v/.
+        .filter(v => v.visibility !== 'protected')
+      const i = Math.max(0, Math.min(items.length - 1, parseInt(url.searchParams.get('i') || '0') || 0))
+      return send(res, 200, collectionPage(c, items, L, i), 'text/html; charset=utf-8', BASE_HEADERS)
     }
 
     // ---- share link ----

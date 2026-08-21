@@ -86,6 +86,15 @@ const M = {
   'share.tooMany':         ['该文件的分享链接过多，请先撤销一些', 'Too many share links on this file — revoke some first'],
   'share.badLimits':       ['有效期与播放次数不能为负数', 'Expiry and view limit cannot be negative'],
 
+  // ---- tags / collections / bulk ----
+  'tag.bad':               ['标签名无效，或标签数量已达上限', 'Invalid tag name, or the tag limit is reached'],
+  'tag.notFound':          ['标签不存在', 'No such tag'],
+  'coll.needTitle':        ['合集需要一个名称', 'A collection needs a title'],
+  'coll.notFound':         ['合集不存在', 'No such collection'],
+  'coll.empty':            ['这个合集还没有内容', 'This collection is empty'],
+  'bulk.noSelection':      ['没有选中任何文件', 'Nothing selected'],
+  'bulk.badAction':        ['不支持的批量操作', 'Unsupported bulk action'],
+
   // ---- player page (server-rendered) ----
   'p.views':               ['{0} 次观看', '{0} views'],
   'p.locked':              ['需要口令', 'Password required'],

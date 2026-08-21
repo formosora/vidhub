@@ -49,15 +49,18 @@ const vStatus = ref('')
 const vVis = ref('')
 const vSize = 15
 
+const vSort = ref('uploaded')
+const vOrder = ref<'asc' | 'desc'>('desc')
 async function loadVideos() {
   const res = await api(`/api/videos?all=1&page=${vPage.value}&size=${vSize}`
-    + `&q=${encodeURIComponent(vQ.value)}&status=${vStatus.value}&visibility=${vVis.value}`)
+    + `&q=${encodeURIComponent(vQ.value)}&status=${vStatus.value}&visibility=${vVis.value}`
+    + `&sort=${vSort.value}&order=${vOrder.value}`)
   if (!res.ok) return
   const j = await res.json()
   videos.value = j.items || []
   vTotal.value = j.total || 0
 }
-watch([tab, vPage, vStatus, vVis], () => { if (tab.value === 'videos') loadVideos() })
+watch([tab, vPage, vStatus, vVis, vSort, vOrder], () => { if (tab.value === 'videos') loadVideos() })
 let vDeb: number | undefined
 watch(vQ, () => { clearTimeout(vDeb); vDeb = window.setTimeout(() => { vPage.value = 1; loadVideos() }, 350) })
 
@@ -398,6 +401,15 @@ onMounted(async () => {
           <option value="private">{{ t('vis.private') }}</option>
           <option value="protected">{{ t('vis.protected') }}</option>
         </select>
+        <select v-model="vSort" class="mini-sel" :title="t('sort.label')">
+          <option value="uploaded">{{ t('sort.uploaded') }}</option>
+          <option value="size">{{ t('sort.size') }}</option>
+          <option value="duration">{{ t('sort.duration') }}</option>
+          <option value="views">{{ t('sort.views') }}</option>
+          <option value="name">{{ t('sort.name') }}</option>
+        </select>
+        <button class="btn ghost sm" :title="vOrder === 'desc' ? t('sort.desc') : t('sort.asc')"
+                @click="vOrder = vOrder === 'desc' ? 'asc' : 'desc'">{{ vOrder === 'desc' ? '↓' : '↑' }}</button>
       </div>
       <div class="glass-card" style="padding:.6rem 1rem;overflow-x:auto">
         <table class="tbl">

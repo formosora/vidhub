@@ -135,10 +135,24 @@ function watermarkFilters(pos) {
 
 // ---------- thumbnails ----------
 
-export async function makeThumb(file, out, w = 320) {
-  const seekAt = '00:00:01'
-  await bin(FFMPEG, ['-y', '-ss', seekAt, '-i', file, '-frames:v', '1',
-    '-vf', `scale='min(${w},iw)':-2`, '-q:v', '4', out], { timeout: 60_000 })
+/**
+ * A frame from one second in — far enough past a fade-in to be representative.
+ *
+ * `duration` matters: seeking to 1s in a clip that is only one second long
+ * lands at or past the end, ffmpeg writes no frame, and the file ends up with
+ * no thumbnail at all. Short clips are seeked to their midpoint instead, and a
+ * seek that still produces nothing falls back to the very first frame.
+ */
+export async function makeThumb(file, out, w = 320, duration = 0) {
+  const scale = `scale='min(${w},iw)':-2`
+  const seek = duration > 0 && duration < 2 ? Math.max(0, duration / 2) : 1
+  const shoot = at => bin(FFMPEG,
+    ['-y', ...(at > 0 ? ['-ss', String(at)] : []), '-i', file, '-frames:v', '1',
+      '-vf', scale, '-q:v', '4', out],
+    { timeout: 60_000 })
+
+  await shoot(seek).catch(() => {})
+  if (!existsSync(out)) await shoot(0)
 }
 
 export async function makeImageThumb(file, out, w = 320) {

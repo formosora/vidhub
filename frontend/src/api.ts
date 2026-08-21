@@ -24,6 +24,18 @@ export interface PublicConf {
  */
 export type Visibility = 'public' | 'private' | 'protected'
 
+/** A per-owner label. `n` is how many of the owner's live files carry it. */
+export interface Tag { id: number; name: string; n?: number }
+
+/** An ordered, shareable set of one owner's videos. */
+export interface Collection {
+  id: number; title: string; descr: string
+  visibility: 'public' | 'private'
+  username: string; count: number
+  url: string; embed: string
+  created: string; updated: string
+}
+
 /** One share link onto a `protected` file. Never carries the password itself. */
 export interface Share {
   token: string; name: string; url: string; embed: string
@@ -114,6 +126,7 @@ export interface VideoItem {
   name: string; orig: string; size: number; kind: string; ext: string
   width: number; height: number; duration: number; status: string
   visibility: Visibility
+  tags?: Tag[]
   mod_score: number; username: string; ip: string; ip_region: string
   views: number; uploaded: string; url: string; player: string; thumb: string; embed: string
 }
